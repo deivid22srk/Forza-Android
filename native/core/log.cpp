@@ -1,11 +1,12 @@
-// The SDK's log.cpp drops debug, info and warn lines in a release build, and
-// the CI ships release: the whole boot (kernel::Boot progress, NtCreateFile
-// failures, unimplemented kernel imports) was invisible on the device, and the
-// black screen could not be diagnosed from its log. This replacement keeps the
-// logx API but makes the sinks honest: stderr, which the logcat pipe forwards,
-// carries info and up in every build; the file carries warn and up in release
-// and everything in a debug build, so it stays small on long game sessions
-// while keeping the warnings milestone 2 depends on.
+// The SDK's log.cpp drops debug, info and warn lines when NDEBUG is defined,
+// and every Android build is release (gradle forces Release on the NDK): the
+// whole boot (kernel::Boot progress, NtCreateFile failures, unimplemented
+// kernel imports) was invisible on the device, and the black screen could not
+// be diagnosed from its log. This replacement keeps the logx API but makes the
+// sinks honest: stderr, which the logcat pipe forwards, carries info and up in
+// every build; the file carries warn and up, small enough for long game
+// sessions while keeping the warnings milestone 2 depends on. The verbose
+// branch (kVerbose, only where NDEBUG is not set) stays for harness builds.
 #include "core/log.h"
 
 #include <algorithm>

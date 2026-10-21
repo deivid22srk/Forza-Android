@@ -177,11 +177,26 @@ int Search(GameFiles& game) {
 // next to the XBE, and those NtCreateFile failures are warn-level traces the
 // release build used to hide. Log the missing data at error level, where the
 // player will actually see it.
+//
+// The disc layout keeps the data in a media folder next to the XBE; Android
+// storage does not promise case, so compare without it. An alternative layout
+// with some other folder is given the benefit of the doubt: the boot log will
+// tell instead.
+bool HasMediaFolder(const fs::path& dir) {
+    std::error_code ec;
+    for (auto& e : fs::directory_iterator(dir, ec)) {
+        std::string name = e.path().filename().string();
+        std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) { return char(std::tolower(c)); });
+        if (e.is_directory(ec) && name == "media") return true;
+    }
+    return false;
+}
+
 void WarnMissingData(const fs::path& dir) {
-    if (kernel::MountedDisc()) return;
+    if (kernel::MountedDisc() || HasMediaFolder(dir)) return;
     std::error_code ec;
     for (auto& e : fs::directory_iterator(dir, ec))
-        if (e.is_directory(ec)) return;  // the extracted files sit next to the XBE
+        if (e.is_directory(ec)) return;
     LOGE(
         "game: only %s, no ISO in %s and no data folder in %s, so the game will stall on D:. "
         "Put the game ISO (any name, .iso) or the extracted files in %s",
@@ -208,7 +223,9 @@ bool FindGame(GameFiles& game) {
     for (;;) {
         int found = Search(game);
         if (found) {
-            WarnMissingData(game.dir);
+            // only a found game has a dir to inspect; -1 means the player turned
+            // another release down and game is left unset
+            if (found > 0) WarnMissingData(game.dir);
             return found > 0;
         }
         WaitForGame();
