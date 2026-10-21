@@ -33,12 +33,20 @@
 
 ## O que falta / quebrado
 
-- Boot no dispositivo para no primeiro export de kernel sem implementação. No
-  primeiro teste foi `IoQueryVolumeInformation` (76), chamado pelo XAPI logo no
-  início do boot (`guest trap at 002674C8`, SIGABRT). Corrigido em
-  `native/runtime/overrides.cpp`; **falta testar de novo** — pode haver outro
-  problema adiante.
-- Backend Vulkan real (marco 3); o atual é no-op. Tela preta é esperada no marco 1.
+- ~~Boot no dispositivo para no primeiro export de kernel sem implementação~~
+  **Corrigido**: `IoQueryVolumeInformation` (76) e os outros dois imports
+  ausentes estão em `native/runtime/overrides.cpp`; o APK `59704e9` não
+  aborta mais.
+- Com o APK novo o app fica vivo esperando o jogo: o teste de 2026-10-21
+  terminou em `no game files in /storage/emulated/0/Forza ... waiting for
+  them` — a pasta do jogo estava vazia. É o `app::FindGame` em loop, não um
+  bug.
+- Ainda falta o jogo completo no aparelho: só o `default.xbe` não basta, o
+  jogo vai abrir os arquivos de dados do disco. Ideal: a **ISO** inteira em
+  `/storage/emulated/0/Forza/` (qualquer nome `.iso`) ou o disco extraído
+  junto do XBE.
+- Backend Vulkan real (marco 3); o atual é no-op. **Tela preta é esperada**
+  mesmo com o jogo presente: o objetivo do teste é o log do boot, não vídeo.
 - Toque, giroscópio, menu de opções, instalador de assets.
 - XACT/XOnline/XNet/WMADEC não validados.
 
@@ -49,11 +57,16 @@
 | 2026-10-21 | [`39617521020`](https://github.com/deivid22srk/Forza-Android/actions/runs/39617521020) | ✅ sucesso (7m1s) | Build full; artifact `forza-full-0ddc3f4…` com APK de 23 MB. |
 | 2026-10-21 | [`39618808504`](https://github.com/deivid22srk/Forza-Android/actions/runs/39618808504) | ✅ sucesso (5m12s) | Build full do `c54bd9c`; APK instalado no dispositivo. |
 | 2026-10-21 | teste em dispositivo (APK do `0ddc3f4`) | ❌ crash no boot | `kernel export 76 (IoQueryVolumeInformation) is not implemented` → `guest trap` → SIGABRT; log: <https://pastebin.com/raw/2BFQhsGf>. |
+| 2026-10-21 | [`39652879274`](https://github.com/deivid22srk/Forza-Android/actions/runs/39652879274) | ✅ sucesso (5m4s) | Build full do `59704e9` com os overrides de kernel; artifact `forza-full-59704e95…`. |
+| 2026-10-21 | teste em dispositivo (APK do `59704e9`) | ⚠️ sem crash, sem jogo | App fica vivo; log: `no game files in /storage/emulated/0/Forza … waiting for them` (pasta vazia); log: <https://pastebin.com/raw/sg0EnNjn>. |
 
 ## Próximo passo
 
-1. Build novo no CI com `native/runtime/overrides.cpp` e instalar o APK novo.
-2. Capturar `adb logcat -s FORZA` e ver até onde o boot chega agora (tela preta
-   é esperada: backend de vídeo ainda é nulo).
+1. Por o jogo de volta em `/storage/emulated/0/Forza/`: o `default.xbe` (SHA-1
+   `42f796aa…`) **e** os dados do disco — o ideal é a **ISO inteira**
+   (qualquer nome, extensão `.iso`); o runtime monta imagens XISO, ou os
+   arquivos extraídos ao lado do XBE.
+2. Capturar `adb logcat -s FORZA` e ver até onde o boot chega agora (tela
+   preta é esperada: backend de vídeo ainda é nulo; o que importa é o log).
 3. Repetir o ciclo correção/asset até o boot estabilizar; então começar o
    backend Vulkan mínimo (clear/present).
