@@ -37,10 +37,13 @@ authenticates that download. `assets/`, `iso/`, `generated/` are gitignored.
 Without `FORZA_XBE_URL`, a stub APK is built. Rationale: legal and repo-size
 constraints.
 
-## ADR-006 — Private repository
+## ADR-006 — Public port repository, private game file
 
-The generated C++ and the APK contain code derived from the game. Keep the
-repo private and do not publish releases without an explicit decision.
+The port repository is public so GitHub Actions runs without private-repo
+billing. The game file lives in a separate private repository and is never
+committed here; CI downloads it with a read-only secret. Build artifacts still
+contain code derived from the game, so keep artifact retention short and do
+not publish releases/APKs without an explicit decision.
 
 ## ADR-007 — Modular CMake, single shared library
 

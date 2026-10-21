@@ -10,8 +10,9 @@ nativo.
 > Microsoft, Turn 10 Studios ou qualquer detentor de *Forza Motorsport*.
 > **Nenhum asset, XBE, ISO ou código gerado do jogo é distribuído aqui.**
 > Você precisa da sua própria cópia legítima do jogo. O C++ gerado e o APK
-> contêm código derivado do jogo; mantenha o repositório privado e não
-> publique releases sem decidir isso conscientemente.
+> contêm código derivado do jogo. O repositório do port é público, mas o jogo
+> fica em um repositório privado separado e os artefatos do CI são para uso
+> pessoal; não publique releases sem decidir isso conscientemente.
 
 ## Status
 

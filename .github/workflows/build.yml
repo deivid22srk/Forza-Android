@@ -35,11 +35,10 @@ jobs:
       NDK_VERSION: 28.2.13676358
       CMAKE_VERSION: 3.31.6
       # Repository secrets. Without FORZA_XBE_URL the job builds the stub APK.
-      # FORZA_XBE_TOKEN is a read-only token for a private repository that holds
-      # the game file; it is only sent to github.com hosts.
+      # FORZA_XBE_TOKEN is scoped to the download step below; it is a read-only
+      # token for the private repository that holds the game file.
       FORZA_XBE_URL: ${{ secrets.FORZA_XBE_URL }}
       FORZA_XBE_SHA256: ${{ secrets.FORZA_XBE_SHA256 }}
-      FORZA_XBE_TOKEN: ${{ secrets.FORZA_XBE_TOKEN }}
 
     steps:
       - uses: actions/checkout@v4
@@ -91,6 +90,8 @@ jobs:
 
       - name: Download the XBE
         if: steps.mode.outputs.full == 'true'
+        env:
+          FORZA_XBE_TOKEN: ${{ secrets.FORZA_XBE_TOKEN }}
         run: ci/download-xbe.sh assets/default.xbe
 
       - name: Recompile the game
@@ -139,4 +140,6 @@ jobs:
           name: forza-${{ steps.mode.outputs.full == 'true' && 'full' || 'stub' }}-${{ github.sha }}
           path: ${{ steps.apk.outputs.path }}
           if-no-files-found: error
-          retention-days: 14
+          # Public repository: shorten retention because the APK contains
+          # recompiled game code. Download it promptly after the run.
+          retention-days: 1
