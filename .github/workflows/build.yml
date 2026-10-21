@@ -50,7 +50,7 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v3
 
-      - uses: android-actions/setup-android@v3
+      - uses: android-actions/setup-android@v4.0.4
 
       - name: Android SDK packages
         run: |
