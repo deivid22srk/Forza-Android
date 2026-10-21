@@ -106,6 +106,24 @@ já é portável e chama `gpu::Backend`; o que falta:
   de HLE adicional.
 - Pausar/retomar no background e no foco perdido.
 
+## Diagnóstico no dispositivo
+
+- **Logging**: o `logx` do SDK descartava linhas debug/info/warn quando
+  `NDEBUG` — e todo build Android é release (o gradle força
+  `CMAKE_BUILD_TYPE=Release` no NDK para todos os buildTypes). Isso deixava o
+  boot inteiro invisível no logcat e no arquivo (o APK `e8d1f90` parecia
+  congelar após o SHA-1; na verdade o boot avançava em silêncio). O substituto
+  em `native/core/log.cpp` (mesma API, o original sai do build por regex em
+  `native/runtime/CMakeLists.txt`) manda **info e acima** para o stderr — que
+  `native/core/logcat.cpp` canaliza para o logcat com a tag `FORZA` — e **warn
+  e acima** para o arquivo; Report segue sem prefixo. Custo por linha é
+  irrelevante no volume atual (~1–5 linhas/s após o boot); vigiar quando o
+  render thread real entrar (marco 3/6).
+- **Dados do jogo**: o `WarnMissingData` (`game_files.cpp`) avisa em error
+  quando o boot acontece sem ISO montada e sem a pasta `media` ao lado do XBE
+  (layout do disco); `missing N:\…` no boot é **normal** — N: é o cache de
+  instalação do console e o jogo cai para `D:\Media\cabs\*.ca2`.
+
 ## Lacunas de plataforma Android
 
 - **Storage**: `/storage/emulated/0/Forza` (all-files access) e
