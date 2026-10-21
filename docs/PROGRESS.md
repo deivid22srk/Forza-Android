@@ -4,7 +4,7 @@
 
 | # | Marco | Status | Notas |
 |---|---|---|---|
-| 1 | Esqueleto: repo, CMake modular, app Android, `build.yml`, recompilação no CI, APK que abre e mostra log | 🟡 em andamento | Estrutura e pipeline prontos; stub APK verde; falta o secret `FORZA_XBE_URL` para o build real. |
+| 1 | Esqueleto: repo, CMake modular, app Android, `build.yml`, recompilação no CI, APK que abre e mostra log | 🟢 concluído | Pipeline completo validado no CI; APK **full** arm64 gerado. Falta testar no dispositivo. |
 | 2 | Boot: `GAPS.md`, kernel/XDK suficientes para passar das intros | ⬜ | |
 | 3 | Vídeo: D3D8 → Vulkan renderizando menus | ⬜ | null backend no lugar do Vulkan real. |
 | 4 | Corrida: pista/carro, física, áudio | ⬜ | |
@@ -17,7 +17,9 @@
 - Estrutura de diretórios em camadas (`core`, `platform`, `gfx`, `audio`,
   `runtime`, `game`, `ui`).
 - `build.yml` com lint + build no GitHub Actions.
-- Pipeline: download do XBE → `xbe_symbols` → `xbe_recomp` → NDK → APK.
+- Pipeline completo: download do XBE privado → `xbe_symbols` → `xbe_recomp` → NDK → APK arm64.
+- Build **full** validado no CI (run `39617521020`): APK de 23 MB com
+  `lib/arm64-v8a/libmain.so` de ~20 MB.
 - Modo stub: APK instalável sem o jogo, com diálogo explicando o secret.
 - Host Android: SDL3, storage, gamepad, áudio SDL3, null backend.
 - Runtime do SDK compilado para arm64 (kernel, D3D8, DSOUND, Bink, XAPI).
@@ -25,22 +27,20 @@
 
 ## O que falta / quebrado
 
-- O build completo depende de `FORZA_XBE_URL`; sem ele, só o stub é gerado.
+- APK full ainda não testado em dispositivo (instalar, copiar o jogo e capturar `adb logcat -s FORZA`).
 - Backend Vulkan real (marco 3); o atual é no-op.
 - Toque, giroscópio, menu de opções, instalador de assets.
 - XACT/XOnline/XNet/WMADEC não validados.
-- Nenhum teste em dispositivo ainda.
 
 ## Últimos runs
 
 | Data | Run | Resultado | Notas |
 |---|---|---|---|
-| — | — | — | Primeiro push a caminho. |
+| 2026-10-21 | [`39617521020`](https://github.com/deivid22srk/Forza-Android/actions/runs/39617521020) | ✅ sucesso (7m1s) | Build full; artifact `forza-full-0ddc3f4…` com APK de 23 MB. |
 
 ## Próximo passo
 
-1. Configurar `FORZA_XBE_URL` (repositório privado com o jogo), `FORZA_XBE_TOKEN`
-   e opcionalmente `FORZA_XBE_SHA256`.
-2. Rodar `build.yml` e ler o log do `xbe_symbols`/`xbe_recomp`.
-3. Corrigir erros de compilação/integração do runtime no Android.
-4. Implementar o backend Vulkan mínimo (clear/present) e o overlay de log.
+1. Baixar o artifact do run `39617521020` e instalar o APK no aparelho.
+2. Copiar `default.xbe` (ou a ISO) para `/storage/emulated/0/Forza/` e conceder acesso.
+3. Capturar `adb logcat -s FORZA` e ver até onde o boot chega.
+4. Corrigir os erros de runtime e implementar o backend Vulkan mínimo (clear/present).
