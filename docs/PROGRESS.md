@@ -56,6 +56,7 @@
 | 2026-10-21 | [`39652879274`](https://github.com/deivid22srk/Forza-Android/actions/runs/39652879274) | ✅ sucesso (5m4s) | Build full do `59704e9` com os overrides de kernel; artifact `forza-full-59704e95…`. |
 | 2026-10-21 | teste em dispositivo (`59704e9`, pasta do jogo vazia) | ⚠️ sem crash, sem jogo | `no game files in /storage/emulated/0/Forza … waiting for them` — o `FindGame` esperando os arquivos; log: <https://pastebin.com/raw/sg0EnNjn>. |
 | 2026-10-21 | teste em dispositivo (APK do `59704e9`, só XBE na pasta assets) | ❌ SIGSEGV no boot | Passou da query de volume; crash em `002674F4` (VA 0xE): XAPI leu `FsContext` = serial do stamp. Log: <https://pastebin.com/raw/UBrktR6Y>. |
+| 2026-10-21 | [`39661479458`](https://github.com/deivid22srk/Forza-Android/actions/runs/39661479458) | ✅ sucesso (5m3s) | Build full do `e8d1f90` (FILE_OBJECT real + GDFX); artifact `forza-full-e8d1f90…`. |
 
 ## Próximo passo
 
