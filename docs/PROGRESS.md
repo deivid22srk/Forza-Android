@@ -5,7 +5,7 @@
 | # | Marco | Status | Notas |
 |---|---|---|---|
 | 1 | Esqueleto: repo, CMake modular, app Android, `build.yml`, recompilação no CI, APK que abre e mostra log | 🟢 concluído | Pipeline completo validado no CI e instalado em dispositivo: app acha o jogo, confere SHA-1 e inicia o boot. |
-| 2 | Boot: `GAPS.md`, kernel/XDK suficientes para passar das intros | 🔄 em andamento | Imports de kernel todos resolvidos (0 missing no boot real); o guest cria o device D3D8, roda a sequência de splash e o instalador BKGDINST descompacta os cabs. Falta observar um boot longo até o estado de menu para fechar o marco. |
+| 2 | Boot: `GAPS.md`, kernel/XDK suficientes para passar das intros | 🔄 em andamento | Imports de kernel todos resolvidos (0 missing no boot real); o guest cria o device D3D8, roda a sequência de splash e o instalador BKGDINST descompacta os cabs. Telemetria de boot longo no lugar (`4d144e2`): batimento de frames + observador do hdd. Falta o teste longo em dispositivo até o estado de menu. |
 | 3 | Vídeo: D3D8 → Vulkan renderizando menus | ⬜ | null backend no lugar do Vulkan real. |
 | 4 | Corrida: pista/carro, física, áudio | ⬜ | |
 | 5 | Entrada: toque, giroscópio, gamepad | ⬜ | |
@@ -40,6 +40,12 @@
 - Aviso honesto de boot sem dados (`WarnMissingData`): se o jogo for achado
   sem ISO montada e sem a pasta `media` ao lado do XBE, o boot avisa em error
   em vez de travar em silêncio.
+- **Telemetria de boot longo** (`4d144e2`): `app::Pace` loga `frames: N presented,
+  X fps` a cada ~10 s (o render loop vivo ou parado) e `monitor.cpp` mede a
+  árvore do `hdd/` a cada 10 s (`hdd: N files, X MiB (+Y MiB in Z s)` ou
+  `hdd: quiet for …`), tornando o instalador BKGDINST visível e separando
+  "instalando" de "travado". Linhas info: só no logcat em release (o arquivo
+  fica com warn+).
 - Modo stub: APK instalável sem o jogo, com diálogo explicando o secret.
 - Host Android: SDL3, storage, gamepad, áudio SDL3, null backend.
 - Runtime do SDK compilado para arm64 (kernel, D3D8, DSOUND, Bink, XAPI).
@@ -80,17 +86,22 @@
 | 2026-10-21 | teste em dispositivo (APK do `e8d1f90`, só XBE nos assets) | ⚠️ silêncio sem crash | O log FORZA para 0,88 s após o sha1, sem trap/tombstone — causa raiz era o filtro de log em release, não um hang. Log: <https://pastebin.com/raw/bkExFGeV>. |
 | 2026-10-21 | [`39669748652`](https://github.com/deivid22srk/Forza-Android/actions/runs/39669748652) | ✅ sucesso | Build full do `4fb5a70` (log do boot visível em release + `WarnMissingData`); artifact `forza-full-4fb5a70…`. |
 | 2026-10-21 | teste em dispositivo (APK do `4fb5a70`, dados extraídos nos assets) | ✅ boot vivo e progredindo | `kernel imports resolved, 0 missing`; threads do guest; `d3d: CreateDevice 640x480`; splash screens de `D:\MEDIA`; instalador `BKGDINST` descompactando cabs para `Z:`; usuário fechou aos ~10 s. Log: <https://pastebin.com/raw/SErnmrpw>. Crítico: APROVADO (ressalvas resolvidas no `088e96f`). |
+| 2026-10-21 | teste em dispositivo (APK do `4733154`, dados em `/storage/emulated/0/Forza`) | ✅ boot vivo; silêncio de 9 s a classificar | Splash em sequência correta (Disclaimer → Junkiexl → Team4za → Frame2, ~2-3 s cada); instalador extraindo `ui_ntsc/megaxpr` para `Z:`; probes de `N:\…` com fallback de disco normais; usuário fechou aos ~17 s sem crash. Log: <https://pastebin.com/raw/m55cxkMy>. |
+| 2026-10-21 | [`39680166521`](https://github.com/deivid22srk/Forza-Android/actions/runs/39680166521) | ✅ sucesso | Build do `4d144e2` (telemetria de boot longo: batimento de frames + observador do hdd). Crítico: APROVADO (ressalvas A1/A2 de robustez do walk corrigidas antes do push). |
 
 ## Próximo passo
 
-1. Instalar o APK do `088e96f` (build mais recente) e rodar o teste **longo**:
-   abrir o app e deixá-lo 10–15 min sem fechar, com o aparelho carregando, até
-   o instalador `BKGDINST` terminar os cabs e o boot chegar ao primeiro menu.
-2. Capturar `adb logcat -s FORZA` inteiro (ou o arquivo `logs/forza.log` em
-   `Android/data/com.deivid.forza/files/`) e conferir: sem `trap`/crash; ao
-   fechar e reabrir, `Z:\InstallMarker*.dat` deve ser achado no lugar de
-   "missing" (instalação pulada).
-3. Se o boot alcançar o estado de menu estável, fechar o **Marco 2** e começar
-   o **Marco 3**: backend Vulkan mínimo (clear + present) substituindo o null
-   backend, depois menus.
-4. Tela preta continua esperada durante o Marco 3 até o primeiro clear/present.
+1. **Marco 3-a (em andamento)**: backend Vulkan mínimo — surface/swapchain por
+   SDL, `Clear`/`Copy`/`Present` no caminho da CPU sobre a memória do guest,
+   recriação de swapchain por epoch — e **contador de FPS real via ImGui**
+   (`fps_counter = true` por padrão no `forza.toml`). No próximo build a tela
+   deixa de ser preta: mostra as cores de clear do jogo + o FPS; menus desenhados
+   vêm no 3-b (shaders/texturas/draws).
+2. Teste longo do boot (o mesmo APK serve): abrir e deixar 10–15 min sem
+   fechar, aparelho carregando, com os dados em `/storage/emulated/0/Forza`
+   (XBE + `media/cabs/*.ca2`). Capturar `adb logcat -s FORZA` inteiro — as
+   linhas `frames:`/`hdd:` não vão para o arquivo de log em release. Conferir:
+   sem `trap`/crash; instalador avançando (`hdd:` crescendo) e o estado final
+   do boot (menu = fim do **Marco 2**).
+3. Ao fechar o Marco 2, seguir para o **Marco 3-b**: HLSL gerado pelo SDK →
+   SPIR-V, texturas dos formatos do Xbox e draws — menus de verdade.

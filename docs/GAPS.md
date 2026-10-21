@@ -123,6 +123,15 @@ já é portável e chama `gpu::Backend`; o que falta:
   quando o boot acontece sem ISO montada e sem a pasta `media` ao lado do XBE
   (layout do disco); `missing N:\…` no boot é **normal** — N: é o cache de
   instalação do console e o jogo cai para `D:\Media\cabs\*.ca2`.
+- **Telemetria de boot longo** (`monitor.cpp` + batimento em `app::Pace`):
+  `frames: N presented, X fps` a cada ~10 s (o loop de apresentação vivo ou
+  parado) e `hdd: N files, X MiB (+Y MiB …)`/`hdd: quiet for …` a cada 10/300 s
+  (o instalador BKGDINST trabalhando). Em release essas linhas são **info**:
+  aparecem só no logcat (`adb logcat -s FORZA`), não no arquivo de log, que
+  fica com warn+. O walk do hdd usa laço manual com `error_code` — o
+  `operator++` do range-for lançaria exceção numa pasta que o instalador
+  remove no meio da varredura, e a exceção numa thread detached mata o
+  processo.
 
 ## Lacunas de plataforma Android
 
