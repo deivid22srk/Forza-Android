@@ -1,0 +1,139 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  format:
+    name: clang-format
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check formatting
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-format
+          clang-format --version
+          find native -type f \( -name '*.cpp' -o -name '*.h' \) -print0 \
+            | xargs -0 -r clang-format --dry-run --Werror
+
+  apk:
+    name: Android APK
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    env:
+      NDK_VERSION: 28.2.13676358
+      CMAKE_VERSION: 3.31.6
+      # Repository secrets. Without FORZA_XBE_URL the job builds the stub APK.
+      FORZA_XBE_URL: ${{ secrets.FORZA_XBE_URL }}
+      FORZA_XBE_SHA256: ${{ secrets.FORZA_XBE_SHA256 }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@v3
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Android SDK packages
+        run: |
+          yes | sdkmanager --licenses > /dev/null || true
+          sdkmanager --install \
+            "platforms;android-34" \
+            "build-tools;34.0.0" \
+            "ndk;$NDK_VERSION" \
+            "cmake;$CMAKE_VERSION"
+
+      - name: Host packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build ccache
+
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: forza-${{ runner.os }}-${{ github.ref_name }}
+          max-size: 2G
+
+      - name: Build mode
+        id: mode
+        run: |
+          if [ -n "${FORZA_XBE_URL:-}" ]; then
+            echo "full=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "full=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::FORZA_XBE_URL is not set; building the stub APK. Add the secret and re-run for the game."
+          fi
+
+      - name: Check out the recompiler SDK
+        if: steps.mode.outputs.full == 'true'
+        run: |
+          git clone --filter=blob:none https://github.com/TGP482/XboxXBE-Recomp.git sdk
+          git -C sdk checkout "$(tr -d '[:space:]' < ci/sdk-revision.txt)"
+
+      - name: Download the XBE
+        if: steps.mode.outputs.full == 'true'
+        run: ci/download-xbe.sh assets/default.xbe
+
+      - name: Recompile the game
+        if: steps.mode.outputs.full == 'true'
+        run: ci/build.sh
+
+      - name: Release key
+        env:
+          KEYSTORE_BASE64: ${{ secrets.FORZA_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.FORZA_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.FORZA_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.FORZA_KEY_PASSWORD }}
+        run: |
+          if [ -z "${KEYSTORE_BASE64:-}" ]; then
+            echo "::warning::No FORZA_KEYSTORE_BASE64; the APK will have a debug signature."
+            exit 0
+          fi
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/forza.jks"
+          {
+            echo "FORZA_KEYSTORE=$RUNNER_TEMP/forza.jks"
+            echo "FORZA_KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD"
+            echo "FORZA_KEY_ALIAS=$KEY_ALIAS"
+            echo "FORZA_KEY_PASSWORD=$KEY_PASSWORD"
+          } >> "$GITHUB_ENV"
+
+      - name: Build APK
+        run: |
+          if [ "${{ steps.mode.outputs.full }}" = "true" ]; then
+            ./gradlew :app:assembleRelease -PforzaStub=false --stacktrace
+          else
+            ./gradlew :app:assembleRelease -PforzaStub=true --stacktrace
+          fi
+
+      - name: Name the APK
+        id: apk
+        run: |
+          suffix=stub
+          if [ "${{ steps.mode.outputs.full }}" = "true" ]; then suffix=full; fi
+          name="Forza-Android-${GITHUB_SHA::7}-${suffix}.apk"
+          cp app/build/outputs/apk/release/app-release.apk "$name"
+          echo "path=$name" >> "$GITHUB_OUTPUT"
+          sha256sum "$name"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: forza-${{ steps.mode.outputs.full == 'true' && 'full' || 'stub' }}-${{ github.sha }}
+          path: ${{ steps.apk.outputs.path }}
+          if-no-files-found: error
+          retention-days: 14

@@ -1,0 +1,7 @@
+add_subdirectory(core)
+add_subdirectory(runtime)
+add_subdirectory(platform)
+add_subdirectory(gfx)
+add_subdirectory(audio)
+add_subdirectory(game)
+add_subdirectory(ui)

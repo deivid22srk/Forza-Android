@@ -1,0 +1,9 @@
+# Recompiler configuration for default.xbe.
+#
+# CI rewrites this file with `xbe_symbols` before `xbe_recomp`: it fills [xbe],
+# [symbols], [data] and `partitions`. This placeholder has no partitions on
+# purpose, so configuring a full build without running the recompiler fails
+# with a clear message instead of compiling a partial image.
+#
+# Never commit a generated version of this file: it describes the user's own
+# copy of the game and belongs to the build output.

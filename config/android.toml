@@ -1,0 +1,15 @@
+# Platform settings template.
+#
+# The current milestone reads only forza.toml from the app's files directory.
+# This file reserves the host-side knobs that the Vulkan backend and the
+# thermal governor will read in the next milestones. Keep it small: anything
+# that changes the emulated console's behaviour belongs in forza.toml or in
+# game/ hooks, not here.
+[platform]
+# "vulkan" is the only renderer planned; the null backend is a build-time
+# fallback, not a user choice.
+renderer = "vulkan"
+# Use a simpler pipeline/state path when the driver reports a low feature level.
+weak_driver_fallback = true
+# Ask Android for a low-latency AAudio stream.
+low_latency_audio = true

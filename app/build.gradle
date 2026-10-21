@@ -1,0 +1,110 @@
+plugins {
+    id "com.android.application"
+}
+
+// SDL3 at the version the SDK's Windows build uses: its Java side goes into the
+// APK, its C side into libSDL3.so.
+def sdlDir = file("../third_party/SDL")
+def sdlTag = "release-3.4.16"
+tasks.register("fetchSDL") {
+    onlyIf { !new File(sdlDir, "CMakeLists.txt").exists() }
+    doLast {
+        exec {
+            commandLine "git", "clone", "--depth", "1", "--branch", sdlTag,
+                    "https://github.com/libsdl-org/SDL.git", sdlDir.absolutePath
+        }
+    }
+}
+preBuild.dependsOn "fetchSDL"
+
+// -PforzaStub=true: no game code, SDL-only window; the Java dialog explains it.
+def stub = project.hasProperty("forzaStub") && project.forzaStub.toString().toBoolean()
+// Use ccache when the host has it (CI installs it); otherwise configure without.
+def ccache = (System.getenv("PATH") ?: "").split(File.pathSeparator).any { new File(it, "ccache").exists() }
+
+android {
+    namespace "com.deivid.forza"
+    compileSdk 34
+    ndkVersion "28.2.13676358"
+
+    defaultConfig {
+        applicationId "com.deivid.forza"
+        minSdk 29
+        targetSdk 34
+        versionCode project.hasProperty("versionCode") ? project.versionCode.toInteger() : 1
+        versionName project.hasProperty("versionName") ? project.versionName : "0.1"
+        buildConfigField "boolean", "STUB", stub.toString()
+        ndk {
+            abiFilters "arm64-v8a"
+        }
+        externalNativeBuild {
+            cmake {
+                arguments "-DANDROID_STL=c++_shared"
+                arguments "-DCMAKE_BUILD_TYPE=Release"
+                arguments "-DFORZA_STUB=${stub ? 'ON' : 'OFF'}"
+                if (ccache) {
+                    arguments "-DCMAKE_C_COMPILER_LAUNCHER=ccache"
+                    arguments "-DCMAKE_CXX_COMPILER_LAUNCHER=ccache"
+                }
+            }
+        }
+    }
+
+    buildFeatures {
+        buildConfig true
+    }
+
+    // The release key from FORZA_KEYSTORE (a .jks path) and its passwords, as
+    // the CI workflow sets them.
+    def keystore = System.getenv("FORZA_KEYSTORE")
+    signingConfigs {
+        if (keystore) {
+            release {
+                storeFile file(keystore)
+                storePassword System.getenv("FORZA_KEYSTORE_PASSWORD")
+                keyAlias System.getenv("FORZA_KEY_ALIAS")
+                keyPassword System.getenv("FORZA_KEY_PASSWORD")
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            // without the release key a debug signature, so the APK installs as it is
+            signingConfig keystore ? signingConfigs.release : signingConfigs.debug
+        }
+        debug {
+            // the recompiled code is far too slow unoptimized
+            externalNativeBuild {
+                cmake {
+                    arguments "-DCMAKE_BUILD_TYPE=Release"
+                }
+            }
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path "../CMakeLists.txt"
+            version "3.31.6"
+        }
+    }
+
+    sourceSets {
+        main {
+            java.srcDirs += new File(sdlDir, "android-project/app/src/main/java")
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    packaging {
+        jniLibs {
+            useLegacyPackaging = false
+        }
+    }
+}

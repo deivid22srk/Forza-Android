@@ -1,0 +1,21 @@
+# Touch and gyroscope layout template.
+#
+# The controls milestone writes this file from the in-game layout editor. Until
+# then it documents the planned keys and is not read by the app.
+[wheel]
+# Normalised screen coordinates, origin at the top left.
+x = 0.15
+y = 0.70
+radius = 0.18
+
+[pedals]
+throttle_x = 0.82
+throttle_y = 0.75
+brake_x = 0.70
+brake_y = 0.80
+handbrake_x = 0.90
+handbrake_y = 0.55
+
+[gyro]
+enabled = false
+sensitivity = 1.0

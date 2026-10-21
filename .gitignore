@@ -1,0 +1,36 @@
+# Game assets and code derived from them: never commit these.
+/assets/
+/iso/
+/generated/
+/sdk/
+/third_party/
+
+# Build outputs
+/out/
+/.gradle/
+/app/build/
+/local.properties
+/build/
+*.apk
+*.aab
+
+# Game images and archives
+*.xbe
+*.iso
+*.7z
+*.zip
+*.bin
+*.xiso
+
+# Signing material
+*.jks
+*.keystore
+*.p12
+*.pfx
+
+# Editor and OS noise
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+*.swp
