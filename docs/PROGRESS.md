@@ -39,7 +39,8 @@
 
 ## Próximo passo
 
-1. Configurar `FORZA_XBE_URL` (e opcionalmente `FORZA_XBE_SHA256`).
+1. Configurar `FORZA_XBE_URL` (repositório privado com o jogo), `FORZA_XBE_TOKEN`
+   e opcionalmente `FORZA_XBE_SHA256`.
 2. Rodar `build.yml` e ler o log do `xbe_symbols`/`xbe_recomp`.
 3. Corrigir erros de compilação/integração do runtime no Android.
 4. Implementar o backend Vulkan mínimo (clear/present) e o overlay de log.

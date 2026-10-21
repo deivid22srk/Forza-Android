@@ -16,8 +16,20 @@ trap 'rm -rf "$work"' EXIT
 download="$work/download.bin"
 
 # --silent keeps the URL (and its signature) out of the log; --show-error still
-# prints the reason on failure.
-curl --fail --location --retry 3 --retry-delay 5 --silent --show-error "$FORZA_XBE_URL" -o "$download"
+# prints the reason on failure. Files in a private GitHub repository need a
+# token, which is only ever sent to GitHub hosts, never to arbitrary URLs.
+curl_args=(--fail --location --retry 3 --retry-delay 5 --silent --show-error)
+case "$FORZA_XBE_URL" in
+    https://raw.githubusercontent.com/*|https://api.github.com/*|https://github.com/*)
+        if [ -n "${FORZA_XBE_TOKEN:-}" ]; then
+            curl_args+=(-H "Authorization: Bearer $FORZA_XBE_TOKEN")
+            case "$FORZA_XBE_URL" in
+                https://api.github.com/*) curl_args+=(-H "Accept: application/vnd.github.raw") ;;
+            esac
+        fi
+        ;;
+esac
+curl "${curl_args[@]}" "$FORZA_XBE_URL" -o "$download"
 
 if [ -n "${FORZA_XBE_SHA256:-}" ]; then
     if ! printf '%s  %s\n' "$FORZA_XBE_SHA256" "$download" | sha256sum --check --status; then

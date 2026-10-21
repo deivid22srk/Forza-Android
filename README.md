@@ -71,7 +71,8 @@ nem compile o APK na sua máquina.
 
 | Secret | Obrigatório | Descrição |
 |---|---|---|
-| `FORZA_XBE_URL` | para build completo | URL **direta** para `default.xbe` ou para a ISO do jogo; o CI extrai o XBE da ISO. |
+| `FORZA_XBE_URL` | para build completo | URL **direta** para `default.xbe` ou para a ISO do jogo; o CI extrai o XBE da ISO. Pode ser um arquivo em um repositório privado do GitHub. |
+| `FORZA_XBE_TOKEN` | se a URL for de repositório privado | Token **somente leitura** com acesso ao repositório que guarda o XBE/ISO. Só é enviado a hosts `github.com`, nunca a URLs de terceiros. |
 | `FORZA_XBE_SHA256` | opcional | SHA-256 do arquivo baixado (XBE ou ISO); se presente, o CI verifica antes de extrair. |
 | `FORZA_KEYSTORE_BASE64` | opcional | `.jks` de release em base64. |
 | `FORZA_KEYSTORE_PASSWORD` | opcional | Senha do keystore. |
@@ -83,10 +84,19 @@ habilitar o build completo. Com o secret, o CI baixa o XBE, roda
 `xbe_symbols` e `xbe_recomp`, compila o código gerado para arm64 e gera o APK
 real.
 
+O padrão recomendado é manter o jogo em um **repositório privado separado**
+(ex.: `deivid22srk/Forza-XBE`, com `default.xbe` na raiz) e apontar
+`FORZA_XBE_URL` para o arquivo raw desse repositório. Assim o jogo nunca entra
+no repositório do port nem no histórico do Git; ele é baixado apenas durante o
+build. Use em `FORZA_XBE_TOKEN` um token fine-grained somente leitura para esse
+repositório.
+
 Exemplo (com `gh` autenticado):
 
 ```bash
-gh secret set FORZA_XBE_URL --repo deivid22srk/Forza-Android --body "https://..."
+gh secret set FORZA_XBE_URL --repo deivid22srk/Forza-Android \
+  --body "https://raw.githubusercontent.com/deivid22srk/Forza-XBE/main/default.xbe"
+gh secret set FORZA_XBE_TOKEN --repo deivid22srk/Forza-Android   # cole um token read-only
 gh secret set FORZA_XBE_SHA256 --repo deivid22srk/Forza-Android --body "<sha256>"
 gh workflow run build.yml --repo deivid22srk/Forza-Android
 gh run watch --repo deivid22srk/Forza-Android

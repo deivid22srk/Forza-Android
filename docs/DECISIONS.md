@@ -31,8 +31,11 @@ no game assets on developer machines beyond the user's own copy.
 ## ADR-005 — XBE via secret URL, never committed
 
 The workflow downloads `default.xbe` from `FORZA_XBE_URL` and never commits
-it. `assets/`, `iso/`, `generated/` are gitignored. Without the secret, a stub
-APK is built. Rationale: legal and repo-size constraints.
+it. The recommended source is a separate private GitHub repository holding
+only the game file; `FORZA_XBE_TOKEN` (read-only, sent only to GitHub hosts)
+authenticates that download. `assets/`, `iso/`, `generated/` are gitignored.
+Without `FORZA_XBE_URL`, a stub APK is built. Rationale: legal and repo-size
+constraints.
 
 ## ADR-006 — Private repository
 

@@ -35,8 +35,11 @@ jobs:
       NDK_VERSION: 28.2.13676358
       CMAKE_VERSION: 3.31.6
       # Repository secrets. Without FORZA_XBE_URL the job builds the stub APK.
+      # FORZA_XBE_TOKEN is a read-only token for a private repository that holds
+      # the game file; it is only sent to github.com hosts.
       FORZA_XBE_URL: ${{ secrets.FORZA_XBE_URL }}
       FORZA_XBE_SHA256: ${{ secrets.FORZA_XBE_SHA256 }}
+      FORZA_XBE_TOKEN: ${{ secrets.FORZA_XBE_TOKEN }}
 
     steps:
       - uses: actions/checkout@v4

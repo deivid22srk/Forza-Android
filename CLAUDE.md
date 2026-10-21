@@ -28,7 +28,9 @@ The workflow:
 
 1. Checks out the SDK into `sdk/` at the revision in `ci/sdk-revision.txt`.
 2. Downloads `default.xbe` (or an ISO) from the `FORZA_XBE_URL` secret, checks
-   `FORZA_XBE_SHA256` if set.
+   `FORZA_XBE_SHA256` if set. For a private GitHub repository the workflow also
+   passes `FORZA_XBE_TOKEN` (read-only); the script only sends it to GitHub
+   hosts.
 3. Builds `tools/` (`xbe_symbols`, `xbe_recomp`) with the host compiler.
 4. Runs `xbe_symbols assets/default.xbe sdk/xdk --library libmain.so --out config/game.toml`
    (only if `config/game.toml` has no `[symbols]` yet).
