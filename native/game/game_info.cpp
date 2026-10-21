@@ -1,4 +1,5 @@
 #include "app/app.h"
+#include "ui/overlay.h"
 
 // What the runtime asks of the game; strings must be set, hooks may stay null.
 // Forza-specific hooks and options are added here (and in hooks.cpp), never in
@@ -14,7 +15,7 @@ const app::GameInfo app::kGame = {
         L"Put your legally acquired Forza Motorsport files in /storage/emulated/0/Forza: default.xbe with its "
         L"media folder, or the game ISO.",
     .images = {{"default.xbe", "Forza"}},
-    .options = {},
+    .options = {{"fps_counter", &forza::ui::g_fps_counter, nullptr}},
     .load = nullptr,
     .save = nullptr,
     .init = nullptr,

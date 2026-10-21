@@ -84,6 +84,18 @@ if(NOT FORZA_STUB)
         GIT_TAG v3.4.0
         GIT_SHALLOW TRUE)
     FetchContent_MakeAvailable(tomlplusplus)
+    # Dear ImGui for the overlay: its core plus the Vulkan and SDL3 backends are
+    # added to the target directly (the repo carries no CMake project). Pinned so
+    # the embedded SPIR-V shaders the Vulkan backend needs stay what we tested.
+    FetchContent_Declare(imgui
+        GIT_REPOSITORY https://github.com/ocornut/imgui.git
+        GIT_TAG v1.91.8
+        GIT_SHALLOW TRUE)
+    FetchContent_GetProperties(imgui)
+    if(NOT imgui_POPULATED)
+        FetchContent_Populate(imgui)
+    endif()
+    set(IMGUI_DIR ${imgui_SOURCE_DIR})
 endif()
 
 # ---------------------------------------------------------------------------
@@ -108,6 +120,7 @@ else()
     target_link_libraries(main PRIVATE
         SDL3::SDL3
         tomlplusplus::tomlplusplus
+        vulkan
         android
         log)
 endif()

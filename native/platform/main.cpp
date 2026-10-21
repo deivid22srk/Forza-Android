@@ -19,6 +19,7 @@
 #include "host.h"
 #include "image_symbols.h"
 #include "kernel/kernel.h"
+#include "ui/overlay.h"
 
 #if defined(__GNUC__)
 #define FORZA_EXPORT __attribute__((visibility("default")))
@@ -125,6 +126,7 @@ FORZA_EXPORT int main(int, char**) {
         logx::Flush();
         return 1;
     }
+    forza::ui::InitWindow(g_window);
 
     input::Init();
     if (app::kGame.window) app::kGame.window(g_window);

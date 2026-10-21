@@ -1,11 +1,13 @@
-// Milestone 1 graphics: a backend that accepts every D3D8 call and draws
-// nothing. It lets the game boot, run its logic and log before the Vulkan
-// renderer exists. The Vulkan backend replaces CreateBackend later.
+// The backend factory: the Vulkan renderer of milestone 3, falling back to the
+// no-op backend when Vulkan cannot be set up, so the game boots and logs the
+// same way it did in milestone 1.
 #include <chrono>
 #include <memory>
 #include <thread>
 
+#include "core/log.h"
 #include "gpu/backend.h"
+#include "vulkan.h"
 
 namespace gpu {
 
@@ -37,10 +39,14 @@ public:
 
 }  // namespace
 
-std::unique_ptr<Backend> CreateBackend() { return std::make_unique<NullBackend>(); }
+std::unique_ptr<Backend> CreateBackend() {
+    if (std::unique_ptr<Backend> vulkan = CreateVulkanBackend()) return vulkan;
+    LOGE("gpu: Vulkan unavailable, falling back to the null backend");
+    return std::make_unique<NullBackend>();
+}
 
 // The null backend has no GPU work to overlap: the game thread drives it
-// directly. The Vulkan backend will wrap its own render thread here.
+// directly. The Vulkan backend records and presents from the game thread too.
 std::unique_ptr<Backend> CreateThreadedBackend(std::unique_ptr<Backend> inner) { return inner; }
 
 }  // namespace gpu
