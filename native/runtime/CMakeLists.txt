@@ -3,6 +3,7 @@
 # Dropped Windows-only pieces and the parts the Android host replaces:
 #   runtime/app/*                 -> native/platform
 #   runtime/core/input.cpp        -> native/platform/input.cpp
+#   runtime/core/log.cpp          -> native/core/log.cpp (logcat needs info lines in release)
 #   runtime/gpu/d3d12.cpp         -> native/gfx (null backend now, Vulkan later)
 #   runtime/gpu/render_thread.cpp -> native/gfx/backend.cpp
 #   runtime/audio/xaudio2.cpp     -> native/audio/output.cpp
@@ -24,6 +25,7 @@ file(GLOB SDK_RUNTIME_SOURCES CONFIGURE_DEPENDS
     ${SDK}/runtime/gpu/*.cpp
     ${SDK}/runtime/xdk/*.cpp)
 list(FILTER SDK_RUNTIME_SOURCES EXCLUDE REGEX "/runtime/core/input\\.cpp$")
+list(FILTER SDK_RUNTIME_SOURCES EXCLUDE REGEX "/runtime/core/log\\.cpp$")
 list(FILTER SDK_RUNTIME_SOURCES EXCLUDE REGEX "/runtime/gpu/(d3d12|render_thread)\\.cpp$")
 list(FILTER SDK_RUNTIME_SOURCES EXCLUDE REGEX "/runtime/xdk/xnet\\.cpp$")
 forza_add_host_sources(${SDK_RUNTIME_SOURCES})

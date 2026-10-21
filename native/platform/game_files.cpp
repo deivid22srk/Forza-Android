@@ -172,6 +172,22 @@ int Search(GameFiles& game) {
     return 1;
 }
 
+// The XBE alone passes FindGame (it boots the kernel fine), but the game then
+// stalls reading its data from D: with neither the disc image nor the files
+// next to the XBE, and those NtCreateFile failures are warn-level traces the
+// release build used to hide. Log the missing data at error level, where the
+// player will actually see it.
+void WarnMissingData(const fs::path& dir) {
+    if (kernel::MountedDisc()) return;
+    std::error_code ec;
+    for (auto& e : fs::directory_iterator(dir, ec))
+        if (e.is_directory(ec)) return;  // the extracted files sit next to the XBE
+    LOGE(
+        "game: only %s, no ISO in %s and no data folder in %s, so the game will stall on D:. "
+        "Put the game ISO (any name, .iso) or the extracted files in %s",
+        IMAGE_XBE, kShared, dir.string().c_str(), kShared);
+}
+
 }  // namespace
 
 std::string Sha1(const std::vector<uint8_t>& data) {
@@ -191,7 +207,10 @@ std::string Sha1(const std::vector<uint8_t>& data) {
 bool FindGame(GameFiles& game) {
     for (;;) {
         int found = Search(game);
-        if (found) return found > 0;
+        if (found) {
+            WarnMissingData(game.dir);
+            return found > 0;
+        }
         WaitForGame();
     }
 }
