@@ -27,3 +27,9 @@ void WindowPixels(int& w, int& h);
 namespace input {
 void OnPadEvent(const SDL_Event& e);
 }
+
+// Boot-long diagnostics (monitor.cpp): a watch that reports the hard disk's
+// growth while the title's background installer copies the media to it.
+namespace monitor {
+void StartHddWatch();
+}

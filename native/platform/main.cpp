@@ -133,6 +133,7 @@ FORZA_EXPORT int main(int, char**) {
                                  "The game failed to start, see the log in the logs folder.", g_window);
         return 1;
     }
+    monitor::StartHddWatch();
 
     for (;;) {
         SDL_Event e;

@@ -199,6 +199,21 @@ std::recursive_mutex& UiLock() {
 
 void Pace() {
     using clock = std::chrono::steady_clock;
+    // The boot-long liveness signal: Pace runs once per presented frame, so a
+    // line every ~10 s means the game is still rendering behind the null
+    // backend, and the line going quiet means the render thread stopped. The
+    // fps tells how close to the cap the guest runs.
+    static uint64_t total = 0, window = 0;
+    static clock::time_point last = clock::now();
+    total++;
+    window++;
+    double secs = std::chrono::duration<double>(clock::now() - last).count();
+    if (secs >= 10) {
+        LOGI("frames: %llu presented, %.1f fps over the last %.0f s", (unsigned long long)total, double(window) / secs,
+             secs);
+        window = 0;
+        last = clock::now();
+    }
     static clock::time_point next = clock::now();
     uint32_t cap = Get().fps_cap;
     auto now = clock::now();
