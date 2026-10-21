@@ -33,6 +33,21 @@ XboxXBE-Recomp já cobre e o que precisa ser implementado na nossa camada
 `.rdata`, `.data`, `DDERR`, `DOLBY`, `XON_RD`, `BINKDATA`, `$$XTIMAGE`,
 `BKGDINST`, `HASHES`, `.XTLID`.
 
+## Imports do kernel (XBOXKRNL)
+
+O thunk table (`0x00485D80`) tem **159 ordinais**. Comparando com os
+`KERNEL_EXPORT`/`KERNEL_DATA` registrados pelo runtime do SDK, faltavam
+exatamente três, agora cobertos em `native/runtime/overrides.cpp`:
+
+| Ordinal | Export | Por que o jogo usa | Implementação |
+|---|---|---|---|
+| 76 | `IoQueryVolumeInformation` | XAPI converte o handle em `FILE_OBJECT` via `ObReferenceObjectByHandle` e consulta o volume; no boot pede classe 5 (`FileFsAttributeInformation`) e procura `FATX` na resposta. | Espelha as classes 1/3/5/7 de `NtQueryVolumeInformationFile` (ord 218); classes desconhecidas devolvem `kInvalidParameter` e logam em vez de abortar. |
+| 232 | `NtUserIoApcDispatcher` | Rotina de conclusão de IO sobreposto; o host completa IO de forma síncrona, então nunca tem trabalho real. | Stub que loga e retorna 0. |
+| 343 | `XcPKGetKeyLen` | Tamanho da chave RSA pública; usado nas checagens de assinatura offline, que o SDK já responde com sucesso. | Devolve 0x800 (2048 bits) e loga. |
+
+`IoQueryFileInformation` (ord 75), embora vizinho, **não** é importado pelo
+Forza, então não foi implementado.
+
 ## Cobertura por biblioteca
 
 | Biblioteca | Runtime do SDK | Status | Observações |
@@ -115,7 +130,9 @@ já é portável e chama `gpu::Backend`; o que falta:
 
 ## Tarefas derivadas
 
-- [ ] Marco 2: primeiro boot no CI com o XBE real; coletar log e preencher
+- [ ] Marco 2: boot no dispositivo com o XBE real. O primeiro teste parou no
+      export `IoQueryVolumeInformation` (76); os três imports de kernel
+      ausentes foram implementados. Falta novo APK e novo log. Detalhes em
       `docs/PROGRESS.md`.
 - [ ] Marco 3: backend Vulkan mínimo (clear/present) + ImGui overlay.
 - [ ] Marco 3: D3D8 draws → Vulkan; cache de pipeline/shaders.

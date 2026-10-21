@@ -28,6 +28,10 @@ list(FILTER SDK_RUNTIME_SOURCES EXCLUDE REGEX "/runtime/gpu/(d3d12|render_thread
 list(FILTER SDK_RUNTIME_SOURCES EXCLUDE REGEX "/runtime/xdk/xnet\\.cpp$")
 forza_add_host_sources(${SDK_RUNTIME_SOURCES})
 
+# Kernel exports the SDK still lacks. Registered on top of the SDK runtime, so
+# they must stay out of ${SDK}; see the file comment and docs/GAPS.md.
+forza_add_host_sources(${CMAKE_CURRENT_SOURCE_DIR}/overrides.cpp)
+
 # The partition count is what xbe_symbols wrote. Keep in sync with config/game.toml.
 file(STRINGS ${FORZA_CONFIG} _partitions REGEX "^partitions *=")
 string(REGEX MATCH "[0-9]+" GAME_PARTITIONS "${_partitions}")
