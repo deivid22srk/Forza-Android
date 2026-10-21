@@ -1,8 +1,9 @@
-// Kernel exports the XboxXBE-Recomp runtime does not implement yet.
+// Kernel exports the XboxXBE-Recomp runtime does not implement, or implements
+// in a way the game's XAPI code cannot survive.
 //
-// Forza's XBE imports three ordinals the SDK registers no handler for, and the
-// dispatcher aborts the guest when it hits one. Everything else is left to the
-// SDK runtime, so this file is only the Android-side gap filler.
+// Forza's XBE imports 159 ordinals; three had no SDK handler, and one handler
+// returned values that made XAPI dereference a bogus pointer. Everything else
+// is left to the SDK runtime, so this file is only the Android-side gap filler.
 //
 // The registrations below run as static initialisers, before kernel::Boot, and
 // RegisterExport overwrites whatever was there. Do not implement behaviour the
@@ -15,15 +16,70 @@
 
 namespace kernel {
 
+namespace {
+
+// A stable, non-zero stand-in for the retail disc's media ID. XAPI returns it
+// as the volume identity of D:, and the game compares it between runs (disc
+// change detection), so it must never vary. Forza's title ID fills the role.
+constexpr uint32_t kMediaId = 0x4D53006E;
+
+// FILE_OBJECT body the game can safely dereference. XAPI's volume/media ID
+// helper (XAPILIB code at 0x267489) reads FILE_OBJECT->FsContext right after
+// ObReferenceObjectByHandle, and the FATX/GDFX branches read from the context
+// itself. The SDK's default body would hold the dispatcher stamp (a small
+// serial) at the FsContext offset, which faults the guest.
+uint32_t BuildFileBody() {
+    uint32_t body = mem::AllocSystem(0x48);  // sizeof(Xbox FILE_OBJECT)
+    std::memset(HostPtr(body), 0, 0x48);
+    W16(body, 5);         // Type: IO_TYPE_FILE (NT io manager, as on Xbox)
+    W16(body + 2, 0x36);  // ReadAccess|WriteAccess|SharedRead|SharedWrite
+    W32(body + 4, 0);     // DeviceObject
+    // FsContext: a fake GDFX volume descriptor. The GDFX branch reads the
+    // media ID at [0]; the FATX branch tests bit 0 of byte 0 (0x6E is even,
+    // so it takes the [0x1C] serial read instead) - both stay in the block.
+    uint32_t ctx = mem::AllocSystem(0x40);
+    std::memset(HostPtr(ctx), 0, 0x40);
+    W32(ctx, kMediaId);
+    W32(ctx + 0x1C, kMediaId);
+    W32(body + 8, ctx);  // FsContext
+    W32(body + 0xC, 0);  // FsContext2
+    return body;
+}
+
+}  // namespace
+
+// 246 ObReferenceObjectByHandle(HANDLE Handle, PVOID ObjectType, PVOID* Object)
+//
+// Same as the SDK for dispatcher objects: a 32-byte body stamped for
+// FromPointer. Files get a real FILE_OBJECT body instead, because XAPI reads
+// FsContext from it and the stamp would sit exactly on that field.
+KERNEL_EXPORT(246, ObReferenceObjectByHandle, 3) {
+    uint32_t h = a[0];
+    ObjectRef o = h == 0xFFFFFFFE ? CurrentRef() : FromHandle(h);
+    if (!o) return kInvalidHandle;
+    if (!o->guest) {
+        if (o->type == ObjType::File) {
+            o->guest = BuildFileBody();
+        } else {
+            uint32_t body = mem::AllocSystem(32);
+            Bind(o, body);
+        }
+    }
+    W32(a[2], o->guest);
+    return kSuccess;
+}
+
 // 76 IoQueryVolumeInformation(PFILE_OBJECT FileObject, FS_INFORMATION_CLASS Class, ULONG Length,
 //                             PVOID FsInformation, PULONG ReturnedLength)
 //
 // XAPI calls this after turning a file handle into a FILE_OBJECT pointer with
 // ObReferenceObjectByHandle. The SDK only implements the handle-based
-// NtQueryVolumeInformationFile, so the layouts are mirrored here. The boot
-// path asks for class 5 and looks for "FATX" in the answer; unknown classes
-// are reported instead of trapping the guest. The file object is ignored the
-// same way NtQueryVolumeInformationFile reports one volume for every handle.
+// NtQueryVolumeInformationFile, so the layouts are mirrored here.
+//
+// Class 5 must answer "GDFX", the Xbox game disc filesystem: on the console
+// D: is an XDFS volume, and XAPI's media ID helper reads the ID from
+// FsContext[0] only on that branch. "FATX" would send it to the hard disk
+// branch instead. Unknown classes are reported instead of trapping the guest.
 KERNEL_EXPORT(76, IoQueryVolumeInformation, 5) {
     uint32_t cls = a[1], len = a[2], out = a[3], returned = a[4];
     if (!out) return kInvalidParameter;
@@ -55,13 +111,13 @@ KERNEL_EXPORT(76, IoQueryVolumeInformation, 5) {
             W32(out + 8, 0x12345678);  // VolumeSerialNumber
             produced = 0x18;
             break;
-        case 5:  // FileFsAttributeInformation: attributes, max name, name length, "FATX"
+        case 5:  // FileFsAttributeInformation: attributes, max name, name length, "GDFX"
             if (len < 16) return kBufferTooSmall;
             std::memset(HostPtr(out), 0, len);
             W32(out, 0);
             W32(out + 4, 42);
             W32(out + 8, 4);
-            std::memcpy(HostPtr(out + 12), "FATX", 4);
+            std::memcpy(HostPtr(out + 12), "GDFX", 4);
             produced = 16;
             break;
         default:

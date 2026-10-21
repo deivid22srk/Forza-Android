@@ -41,12 +41,19 @@ exatamente três, agora cobertos em `native/runtime/overrides.cpp`:
 
 | Ordinal | Export | Por que o jogo usa | Implementação |
 |---|---|---|---|
-| 76 | `IoQueryVolumeInformation` | XAPI converte o handle em `FILE_OBJECT` via `ObReferenceObjectByHandle` e consulta o volume; no boot pede classe 5 (`FileFsAttributeInformation`) e procura `FATX` na resposta. | Espelha as classes 1/3/5/7 de `NtQueryVolumeInformationFile` (ord 218); classes desconhecidas devolvem `kInvalidParameter` e logam em vez de abortar. |
+| 76 | `IoQueryVolumeInformation` | XAPI converte o handle em `FILE_OBJECT` via `ObReferenceObjectByHandle` e consulta o volume; no boot pede classe 5 (`FileFsAttributeInformation`). O helper de media ID do XAPILIB (0x267489) ramifica no nome: **GDFX** lê o media ID de `FsContext[0]`; FATX lê o serial de `FsContext[0x1C]`. | Espelha as classes 1/3/5/7 de `NtQueryVolumeInformationFile` (ord 218) e responde **"GDFX"** na classe 5 (o disco do jogo é XDFS no console); classes desconhecidas devolvem `kInvalidParameter` e logam em vez de abortar. |
 | 232 | `NtUserIoApcDispatcher` | Rotina de conclusão de IO sobreposto; o host completa IO de forma síncrona, então nunca tem trabalho real. | Stub que loga e retorna 0. |
 | 343 | `XcPKGetKeyLen` | Tamanho da chave RSA pública; usado nas checagens de assinatura offline, que o SDK já responde com sucesso. | Devolve 0x800 (2048 bits) e loga. |
+| 246 | `ObReferenceObjectByHandle` | O SDK registra o corpo do objeto com o *stamp* do dispatcher em +8/+12 — exatamente onde ficam `FsContext`/`FsContext2` do `FILE_OBJECT`. O crash de boot seguinte (SIGSEGV em `002674F4`, VA 0xE) foi o XAPI lendo `FsContext` = serial 14. | Override: objetos de arquivo ganham um `FILE_OBJECT` real (Type=5/IO_TYPE_FILE, Size=0x48) com `FsContext` apontando para um descritor GDFX falso (`[0]` = media ID `0x4D53006E`, `[0x1C]` = serial); objetos dispatcher mantêm o comportamento do SDK (`AllocSystem(32)` + `Bind`). |
 
 `IoQueryFileInformation` (ord 75), embora vizinho, **não** é importado pelo
 Forza, então não foi implementado.
+
+### Media ID do disco
+
+`kMediaId = 0x4D53006E` (o title ID) é um valor estável no lugar do media ID
+do disco de varejo. O jogo usa o ID para detectar troca de disco entre
+execuções, então o que importa é ser estável e não-nulo.
 
 ## Cobertura por biblioteca
 
