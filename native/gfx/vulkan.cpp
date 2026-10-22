@@ -926,6 +926,12 @@ bool VulkanBackend::Init(uint32_t width, uint32_t height) {
     }
     VkPhysicalDeviceProperties props{};
     vkGetPhysicalDeviceProperties(physical_, &props);
+    // ok_ is born false and every entry point (draw, clear, copy, sync, flush,
+    // present) gates on it, so this arm belongs here and nowhere else. Without
+    // it the backend behaves exactly like the null one while the whole setup
+    // logs as a success, which is what the 3-b field test hit: "Vulkan ready"
+    // in the same log as presents 88 parked 88 and draws 0.
+    ok_ = true;
     LOGR("gpu: Vulkan ready on %s: guest %ux%u, swapchain %ux%u", props.deviceName, guest_w_, guest_h_, extent_.width,
          extent_.height);
     return true;
