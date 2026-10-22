@@ -84,6 +84,7 @@ struct PathStats {
     uint64_t draw_calls = 0, draw_recorded = 0, draw_no_rt = 0, draw_describe = 0, draw_assemble = 0, draw_fmt = 0,
              draw_points = 0;
     uint64_t copies = 0, copy_fail = 0;
+    uint64_t tex_binds = 0, tex_created = 0, tex_failed = 0, tex_rt = 0, subopt = 0;
     uint64_t submits = 0, readback_attempts = 0, readback_bytes = 0;
     double beat = 0;
 };
@@ -97,13 +98,15 @@ void PathBeat() {
     g_path.beat = now;
     LOGI(
         "gpu path: presents %llu shown %llu parked %llu | draws %llu recorded %llu (no-rt %llu, describe %llu, "
-        "assemble %llu, format %llu, points %llu) | copies %llu (fail %llu) | submits %llu, readback %llu KiB / %llu "
-        "targets",
+        "assemble %llu, format %llu, points %llu) | copies %llu (fail %llu) | tex binds %llu created %llu failed %llu "
+        "rt %llu | subopt %llu | submits %llu, readback %llu KiB / %llu targets",
         (unsigned long long)g_path.presents, (unsigned long long)g_path.shown, (unsigned long long)g_path.parked,
         (unsigned long long)g_path.draw_calls, (unsigned long long)g_path.draw_recorded,
         (unsigned long long)g_path.draw_no_rt, (unsigned long long)g_path.draw_describe,
         (unsigned long long)g_path.draw_assemble, (unsigned long long)g_path.draw_fmt,
         (unsigned long long)g_path.draw_points, (unsigned long long)g_path.copies, (unsigned long long)g_path.copy_fail,
+        (unsigned long long)g_path.tex_binds, (unsigned long long)g_path.tex_created,
+        (unsigned long long)g_path.tex_failed, (unsigned long long)g_path.tex_rt, (unsigned long long)g_path.subopt,
         (unsigned long long)g_path.submits, (unsigned long long)(g_path.readback_bytes / 1024),
         (unsigned long long)g_path.readback_attempts);
 }
@@ -377,11 +380,6 @@ constexpr uint32_t kMAlphaTestEnable = 0x300, kMAlphaFunc = 0x33C, kMAlphaRef = 
                    kMDestBlend = 0x348, kMBlendColor = 0x34C, kMBlendOp = 0x350, kMColorWriteEnable = 0x358,
                    kMPsConstant0 = 0xA60, kMPsConstant1 = 0xA80, kMPsFinalConstant0 = 0x1E20,
                    kMPsFinalConstant1 = 0x1E24;
-
-constexpr uint32_t kTssAddressU = 0, kTssAddressV = 1, kTssMagFilter = 3, kTssMinFilter = 4, kTssMipFilter = 5,
-                   kTssMipLodBias = 6, kTssMaxMipLevel = 7, kTssMaxAnisotropy = 8, kTssBumpEnvMat00 = 21,
-                   kTssBumpEnvMat01 = 22, kTssBumpEnvMat11 = 23, kTssBumpEnvMat10 = 24, kTssBumpEnvLScale = 25,
-                   kTssBumpEnvLOffset = 26;
 
 constexpr float kAlphaTestAlways = 7.0f;  // Cmp(ALWAYS) - 1, the shader's always-compare code
 
@@ -1047,6 +1045,13 @@ bool VulkanBackend::CreateSurfaceAndSwapchain() {
                             : VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR;
     sc.presentMode = VK_PRESENT_MODE_FIFO_KHR;
     sc.clipped = VK_TRUE;
+    // one line per swapchain with the transform state: the rotation decision
+    // (prerotate the blit or keep the driver's scanout rotation) needs the
+    // panel's currentTransform from the field, and the suboptimal storm of the
+    // round 5 log needs its cause named
+    LOGI("gpu: swapchain caps: supported %X current %X picked %X | alpha %X | images %u extent %ux%u",
+         caps.supportedTransforms, caps.currentTransform, sc.preTransform, caps.supportedCompositeAlpha, count,
+         extent_.width, extent_.height);
     if (!(caps.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_DST_BIT)) {
         LOGE("gpu: the swapchain does not take transfers, the blit cannot run");
         return false;
@@ -1725,6 +1730,7 @@ Texture* VulkanBackend::EnsureTexture(uint32_t data, const TextureDesc& d, const
         drop();
         return nullptr;
     }
+    g_path.tex_created++;
     return &stored;
 }
 
@@ -2080,6 +2086,8 @@ void VulkanBackend::Draw(const State& s, uint32_t prim, uint32_t start, uint32_t
     TexInfo infos[4]{};
     TextureDesc tds[4]{};
     bool rt_stage[4]{};
+    bool bound = s.textures[0] || s.textures[1] || s.textures[2] || s.textures[3];
+    if (bound) g_path.tex_binds++;
     uint64_t sig = MemSig(td.data, GuestPitch(td.width) * td.height);
     bool stale = !rt->uploaded || sig != rt->sig;
     bool setup = stale;
@@ -2104,6 +2112,35 @@ void VulkanBackend::Draw(const State& s, uint32_t prim, uint32_t start, uint32_t
             if (tx == textures_.end() || tx->second.epoch != DirtyEpoch(d.data)) setup = true;
         }
     }
+    if (rt_stage[0] || rt_stage[1] || rt_stage[2] || rt_stage[3]) g_path.tex_rt++;
+    // the first textured draw dumps its bound state: the front-end quads sample
+    // with UVs and the field probe shows the frame black with alpha, so this
+    // line says whether the texture path is alive and how the combiner mixes
+    // the sample with the vertex colour (a MODULATE over a black diffuse stays
+    // black, that is the game's own fade layer and not a backend fault). It
+    // sits after the describe loop and fires on LOG_FIRST, so a first draw the
+    // cube/3D gate drops cannot burn the one shot; the first stage the draw
+    // actually binds is the one dumped. kTss* resolve to gpu/state.h: the file
+    // lives in namespace gpu and duplicates of those constants have already
+    // produced off-by-ones the compiler cannot see
+    if (bound) {
+        int si = -1;
+        for (int i = 0; i < 4; i++)
+            if (s.textures[i]) {
+                si = i;
+                break;
+            }
+        if (si >= 0) {
+            const auto& t0 = s.tss[size_t(si)];
+            LOG_FIRST(1,
+                      "gpu: first textured draw: stage %d t %08X %ux%u fmt %u lin %u comp %u | colop %u arg1 %u "
+                      "arg2 %u alop %u | blend en %u src %u dst %u op %u | tfactor %08X",
+                      si, tds[si].data, tds[si].width, tds[si].height, tds[si].format, tds[si].linear,
+                      Format(tds[si].format).compressed, t0[kTssColorOp], t0[kTssColorArg1], t0[kTssColorArg2],
+                      t0[kTssAlphaOp], SimpleState(s, kMBlendEnable), SimpleState(s, kMSrcBlend),
+                      SimpleState(s, kMDestBlend), SimpleState(s, kMBlendOp), s.rs[kRsTextureFactor]);
+        }
+    }
     // everything recorded before the render pass, so the image barriers stay legal
     if (setup) ClosePass();
     if (stale) {
@@ -2122,6 +2159,7 @@ void VulkanBackend::Draw(const State& s, uint32_t prim, uint32_t start, uint32_t
             const FormatInfo& fi = Format(tds[i].format);
             const uint32_t* pal = s.palettes[i] ? (const uint32_t*)kernel::HostPtr(s.palettes[i]) : nullptr;
             if (!EnsureTexture(tds[i].data, tds[i], fi, pal)) {
+                g_path.tex_failed++;
                 LOG_FIRST(8, "gpu: stage texture %08X upload failed, draw skipped", tds[i].data);
                 return;
             }
@@ -2431,7 +2469,16 @@ bool VulkanBackend::SubmitFrame(const std::vector<uint8_t>& px, uint32_t flight)
         LOG_FIRST(8, "gpu: acquire failed (%d)", int(acq));
         return false;
     }
-    recreate_next_ |= acq == VK_SUBOPTIMAL_KHR;  // the image is still good, show it and rebuild later
+    if (acq == VK_SUBOPTIMAL_KHR) {
+        // SUBOPTIMAL is presentable and may stay that way for the surface's
+        // whole life (the Adreno reports it whenever the picked preTransform
+        // differs from the panel's currentTransform): rebuilding every frame
+        // never converges, the round 5 field log shows 1312 rebuilds in 52 s
+        // and 4 gralloc probe failures per rebuild. Only OUT_OF_DATE,
+        // SURFACE_LOST and a new surface epoch rebuild the swapchain.
+        g_path.subopt++;
+        LOG_FIRST(4, "gpu: acquire suboptimal, presenting anyway");
+    }
     if (idx >= cmds_.size()) return false;
     VkCommandBuffer cmd = cmds_[idx];
     FORZA_VK_SOFT(vkResetFences(device_, 1, &fence), "gpu: fence reset failed (%d)");
@@ -2528,9 +2575,11 @@ bool VulkanBackend::SubmitFrame(const std::vector<uint8_t>& px, uint32_t flight)
     pi.pSwapchains = &swapchain_;
     pi.pImageIndices = &idx;
     VkResult shown = vkQueuePresentKHR(queue_, &pi);
-    if (shown == VK_ERROR_OUT_OF_DATE_KHR || shown == VK_ERROR_SURFACE_LOST_KHR || shown == VK_SUBOPTIMAL_KHR)
-        recreate_next_ = true;
-    else if (shown != VK_SUCCESS)
+    if (shown == VK_ERROR_OUT_OF_DATE_KHR || shown == VK_ERROR_SURFACE_LOST_KHR) recreate_next_ = true;
+    else if (shown == VK_SUBOPTIMAL_KHR) {
+        g_path.subopt++;
+        LOG_FIRST(4, "gpu: present suboptimal, keeping the swapchain");
+    } else if (shown != VK_SUCCESS)
         LOG_FIRST(8, "gpu: present failed (%d)", int(shown));
     return true;
 }
