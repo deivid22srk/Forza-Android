@@ -6,7 +6,7 @@
 |---|---|---|---|
 | 1 | Esqueleto: repo, CMake modular, app Android, `build.yml`, recompilação no CI, APK que abre e mostra log | 🟢 concluído | Pipeline completo validado no CI e instalado em dispositivo: app acha o jogo, confere SHA-1 e inicia o boot. |
 | 2 | Boot: `GAPS.md`, kernel/XDK suficientes para passar das intros | 🔄 em andamento | Imports de kernel todos resolvidos (0 missing no boot real); o guest cria o device D3D8, roda a sequência de splash e o instalador BKGDINST descompacta os cabs. Telemetria de boot longo no lugar (`4d144e2`): batimento de frames + observador do hdd. Falta o teste longo em dispositivo até o estado de menu. |
-| 3 | Vídeo: D3D8 → Vulkan renderizando menus | 🔄 em andamento | **3-a concluído** (`9d9d8b2`): backend Vulkan com present real (decode do SDK + gamma + blit letterbox), overlay ImGui com FPS real (`fps_counter = true` por padrão) e fallback null. **3-b concluído** (`5981d92`): draws fixed-function (quads texturizados dos menus) com HLSL→SPIR-V em processo, texturas BGRA8/DXT/P8 e pipelines por estado; CI verde e APK `forza-full-5981d92…` pronto para campo. Depth/stencil/points/etc. = 3-c. |
+| 3 | Vídeo: D3D8 → Vulkan renderizando menus | 🔄 em andamento | **3-a concluído** (`9d9d8b2`): backend Vulkan com present real (decode do SDK + gamma + blit letterbox), overlay ImGui com FPS real (`fps_counter = true` por padrão) e fallback null. **3-b concluído** (`5981d92`): draws fixed-function (quads texturizados dos menus) com HLSL→SPIR-V em processo, texturas BGRA8/DXT/P8 e pipelines por estado. **Rodada de campo 2** (`fb1f2a7`): telemetria do caminho de desenho (LOG_FIRST em cada porta + batimento de 10 s) e contador com fonte própria a 40 px. **Rodada 3** (`298485b`): a telemetria pinou a causa raiz da tela preta — `ok_` do backend nunca era armado (nascia `false`, 19 atribuições `false`, nenhuma `true` em todo o histórico) e todo o backend vivia como o nulo; fix arma `ok_ = true` no fim do `Init` (Crítico APROVADO, CI verde). Depth/stencil/points/etc. = 3-c. |
 | 4 | Corrida: pista/carro, física, áudio | ⬜ | |
 | 5 | Entrada: toque, giroscópio, gamepad | ⬜ | |
 | 6 | Desempenho: G80/480+, cache, resolução dinâmica, térmica | ⬜ | |
@@ -100,17 +100,22 @@
 | 2026-10-22 | [`39701339167`](https://github.com/deivid22srk/Forza-Android/actions/runs/39701339167) | ❌ falha no Build APK | `ec8e7b1`+docs (`0ace38a`, marco 3-b): o NDK ≥ r27 não embute mais o shaderc — o FATAL_ERROR projetado no CMake do gfx matou o configure. Correção: `6ac069a` compila o shaderc do source (v2025.5 pinada) no CI e o instala via `FORZA_SHADERC_DIR`. Crítico 1ª rodada: REPROVADO (A1: `shaderc_combined` em vez do target fino; A2: headers em `libshaderc/include/`) → corrigido. |
 | 2026-10-22 | [`39708959398`](https://github.com/deivid22srk/Forza-Android/actions/runs/39708959398) | ❌ falha no Build APK | `6ac069a`: **Build shaderc passou** (pipeline cache/dist funcionou); falha nos typedefs — a v2025.5 define os handles como ponteiros (`typedef struct shaderc_compiler* shaderc_compiler_t;`) e o `vulkan.cpp` usava o estilo do header antigo do NDK. Correção: `5981d92` (3 declarações sem `*`). Crítico 3ª rodada: APROVADO. |
 | 2026-10-22 | [`39710808032`](https://github.com/deivid22srk/Forza-Android/actions/runs/39710808032) | ✅ sucesso | Build do `5981d92` — **marco 3-b fechado em CI**: clang-format + Android APK verdes; artifact `forza-full-5981d9231b1f4a407f9a08c5ef0968c37d8d8763` (12 MB). |
+| 2026-10-22 | teste em dispositivo (APK do `5981d92`) | ❌ tela preta, sem FPS | Boot completo, 30 fps estáveis, `fps_counter = true`, mas zero linhas do caminho de desenho e overlay invisível. Log: <https://pastebin.com/raw/CWmkrhwC>. |
+| 2026-10-22 | [`39758253034`](https://github.com/deivid22srk/Forza-Android/actions/runs/39758253034) | ✅ sucesso | Build do `fb1f2a7` (telemetria do caminho de desenho + contador a 40 px). Crítico: APROVADO. |
+| 2026-10-22 | teste em dispositivo (APK do `fb1f2a7`) | 🔍 causa raiz pinada | Overlay agora inicializa (`ImGui overlay ready`); batimento revelou `presents 88 parked 88, draws 0` com `present parked: ok 0` — o `ok_` do backend nunca era armado. Log: <https://pastebin.com/raw/gSKYNf00>. |
+| 2026-10-22 | [`39762133780`](https://github.com/deivid22srk/Forza-Android/actions/runs/39762133780) | ✅ sucesso | Build do `298485b` — **fix: `ok_ = true` no fim do `Init`** (o backend rodava como o nulo desde o 3-a). Crítico: APROVADO (sem bloqueantes). |
 
 ## Próximo passo
 
-1. **Teste de campo do APK do 3-b** (artifact `forza-full-5981d92…` do run
-   [`39710808032`](https://github.com/deivid22srk/Forza-Android/actions/runs/39710808032)):
+1. **Teste de campo do APK do fix `298485b`** (artifact `forza-full-298485b…`
+   do run [`39762133780`](https://github.com/deivid22srk/Forza-Android/actions/runs/39762133780)):
    abrir o app com os dados em `/storage/emulated/0/Forza` e conferir:
-   (a) **contador de FPS visível** no canto superior esquerdo (fix da R6);
+   (a) **contador de FPS visível** no canto superior esquerdo (fonte a 40 px);
    (b) **splash screens desenhadas de verdade** (Disclaimer/logos) e menus do
-   front-end; (c) `adb logcat -s FORZA` sem `gpu: shader compile failed` (se
-   aparecer, o erro do glslang nomeia o conserto) e sem linhas de skip
-   (`… são 3-c`) vindas do front-end; (d) boot longo até o menu com `frames:`
-   a 30 fps.
+   front-end; (c) no `adb logcat -s FORZA`, as linhas novas esperadas:
+   `gpu: first target image uploaded`, `gpu: first draw recorded`, `gpu: first
+   readback landed` e o batimento `gpu path:` com `shown` subindo e
+   `parked` parado; (d) se algo cair numa porta (no-rt/describe/assemble/
+   format/points), a linha `LOG_FIRST` nomeia o conserto exato.
 2. Depois do campo, o **Marco 3-c**: depth/stencil, points, cube/3D/depth
    textures e occlusion reports — abre o caminho das cenas 3D (corrida).
