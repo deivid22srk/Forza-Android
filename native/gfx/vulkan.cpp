@@ -1979,6 +1979,11 @@ VkPipeline VulkanBackend::EnsurePipeline(const State& s, const Assembled& a, VkS
     rs.cullMode = k.cull && triangles ? VK_CULL_MODE_BACK_BIT : VK_CULL_MODE_NONE;
     rs.frontFace = k.cull == 0x900 ? VK_FRONT_FACE_COUNTER_CLOCKWISE : VK_FRONT_FACE_CLOCKWISE;
     rs.lineWidth = 1;
+    // the first pipeline dumps the raster state the draw path derives: the
+    // field shows a submitted draw with a zeroed target, so this names the
+    // write mask and cull that decide what reaches the attachment
+    LOG_FIRST(1, "gpu: first pipeline: cull %u fill %u wmask %u blend en %u src %u dst %u op %u triangles %d", k.cull,
+              k.fill, k.wmask, k.blend, k.src, k.dst, k.op, triangles);
     // depth and stencil stay out until 3-c
     VkPipelineDepthStencilStateCreateInfo ds{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
     VkPipelineColorBlendAttachmentState cb{};
@@ -2379,15 +2384,36 @@ void VulkanBackend::Draw(const State& s, uint32_t prim, uint32_t start, uint32_t
     g_path.draw_recorded++;
     LOG_FIRST(1, "gpu: first draw recorded: prim %u, count %u, %u streams, target %08X %ux%u format %u", prim, count,
               a.buffer_count, td.data, td.width, td.height, td.format);
+    // the first draw dumps its whole fixed-function state: the field shows a
+    // submitted draw with a zeroed target, so this names the states that
+    // decide what reaches the attachment (viewport, scissor, write mask,
+    // alpha test, cull) and the topology the assembler produced
+    LOG_FIRST(1,
+              "gpu: first draw state: vp %u,%u %ux%u | scissor n%u [%u %u %u %u] | cwr %08X | atest en %u func %u ref "
+              "%u | cull %u fill %u z %u sten %u blend %u | topo %d strip %d draws %u idx %u",
+              s.viewport.x, s.viewport.y, s.viewport.w, s.viewport.h, s.scissor_count, s.scissors[0], s.scissors[1],
+              s.scissors[2], s.scissors[3], SimpleState(s, kMColorWriteEnable), SimpleState(s, kMAlphaTestEnable),
+              SimpleState(s, kMAlphaFunc), SimpleState(s, kMAlphaRef) & 0xFF, s.rs[kRsCullMode], s.rs[kRsFillMode],
+              s.rs[kRsZEnable], s.rs[kRsStencilEnable], SimpleState(s, kMBlendEnable), int(a.topology), int(a.strip),
+              a.draw_count, a.index_count);
+    if (a.index_count) {
+        uint32_t ix[6]{};
+        for (uint32_t i = 0; i < 6 && i < a.index_count; i++)
+            ix[i] = a.index16 ? ((const uint16_t*)a.index_src)[i] : ((const uint32_t*)a.index_src)[i];
+        LOG_FIRST(1, "gpu: first draw indices: %u: %u %u %u %u %u %u", a.index_count, ix[0], ix[1], ix[2], ix[3], ix[4],
+                  ix[5]);
+    }
     // the first draws dump the head of their first stream: a field log tells a
     // degenerate quad (words all zero) from a placed one without a debugger
     if (g_path.draw_recorded <= 2 && a.buffer_count) {
         const VertexBuffer& b = a.buffers[0];
-        uint32_t w[8] = {};
+        uint32_t w[16] = {};
         std::memcpy(w, b.src, std::min<uint32_t>(sizeof(w), b.bytes));
-        LOGI("gpu: probe vertices draw %llu: prim %u, stride %u, bytes %u: %08X %08X %08X %08X %08X %08X %08X %08X",
-             (unsigned long long)g_path.draw_recorded, prim, b.stride, b.bytes, w[0], w[1], w[2], w[3], w[4], w[5],
-             w[6], w[7]);
+        LOGI(
+            "gpu: probe vertices draw %llu: prim %u, stride %u, bytes %u: "
+            "%08X %08X %08X %08X %08X %08X %08X %08X %08X %08X %08X %08X %08X %08X %08X %08X",
+            (unsigned long long)g_path.draw_recorded, prim, b.stride, b.bytes, w[0], w[1], w[2], w[3], w[4], w[5], w[6],
+            w[7], w[8], w[9], w[10], w[11], w[12], w[13], w[14], w[15]);
     }
 }
 
