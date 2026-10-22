@@ -18,6 +18,7 @@
 // The Dear ImGui FPS counter records on top in the same overlay pass. Draw
 // reports itself and waits for nothing.
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstring>
@@ -82,6 +83,7 @@ struct PathStats {
     uint64_t presents = 0, parked = 0, shown = 0, decode_fail = 0;
     uint64_t draw_calls = 0, draw_recorded = 0, draw_no_rt = 0, draw_describe = 0, draw_assemble = 0, draw_fmt = 0,
              draw_points = 0;
+    uint64_t copies = 0, copy_fail = 0;
     uint64_t submits = 0, readback_attempts = 0, readback_bytes = 0;
     double beat = 0;
 };
@@ -95,13 +97,45 @@ void PathBeat() {
     g_path.beat = now;
     LOGI(
         "gpu path: presents %llu shown %llu parked %llu | draws %llu recorded %llu (no-rt %llu, describe %llu, "
-        "assemble %llu, format %llu, points %llu) | submits %llu, readback %llu KiB / %llu targets",
+        "assemble %llu, format %llu, points %llu) | copies %llu (fail %llu) | submits %llu, readback %llu KiB / %llu "
+        "targets",
         (unsigned long long)g_path.presents, (unsigned long long)g_path.shown, (unsigned long long)g_path.parked,
         (unsigned long long)g_path.draw_calls, (unsigned long long)g_path.draw_recorded,
         (unsigned long long)g_path.draw_no_rt, (unsigned long long)g_path.draw_describe,
         (unsigned long long)g_path.draw_assemble, (unsigned long long)g_path.draw_fmt,
-        (unsigned long long)g_path.draw_points, (unsigned long long)g_path.submits,
-        (unsigned long long)(g_path.readback_bytes / 1024), (unsigned long long)g_path.readback_attempts);
+        (unsigned long long)g_path.draw_points, (unsigned long long)g_path.copies, (unsigned long long)g_path.copy_fail,
+        (unsigned long long)g_path.submits, (unsigned long long)(g_path.readback_bytes / 1024),
+        (unsigned long long)g_path.readback_attempts);
+}
+
+// the field round 4 log presents frames that stay black: these probes sample a
+// guest-side buffer every 4th texel and log the mean colour and the share of
+// non-black texels, once at the start and then every 600th call, so the next
+// field log says where the black enters (draw output, game copy, decode, gamma)
+bool ProbeDue(std::atomic<uint32_t>& seq) {
+    uint32_t k = seq.fetch_add(1, std::memory_order_relaxed);
+    return k < 3 || k % 600 == 0;
+}
+
+void ProbeBytes(const char* what, uint32_t id, uint32_t w, uint32_t h, const uint8_t* p, uint32_t pitch) {
+    if (!p || !pitch) return;
+    // the copy probe reads guest surfaces of any pitch: clamp to the row that
+    // really holds 32 bit texels so a 16 bpp destination cannot read past it
+    uint32_t xmax = std::min(w, pitch >> 2);
+    uint64_t sum = 0;
+    uint32_t nz = 0, m = 0;
+    for (uint32_t y = 0; y < h; y += 4) {
+        const uint32_t* row = (const uint32_t*)(p + size_t(y) * pitch);
+        for (uint32_t x = 0; x < xmax; x += 4) {
+            uint32_t v = row[x];
+            sum += (v & 0xFF) + ((v >> 8) & 0xFF) + ((v >> 16) & 0xFF);
+            nz += v != 0;
+            m++;
+        }
+    }
+    if (!m) return;
+    LOGI("gpu: probe %s %08X %ux%u: mean %u, nonzero %u%%", what, id, w, h, unsigned(sum / (uint64_t(m) * 3)),
+         unsigned(nz * 100 / m));
 }
 
 uint32_t FindMemoryType(VkPhysicalDevice physical, uint32_t wanted, VkMemoryPropertyFlags props) {
@@ -639,6 +673,10 @@ private:
                       VkAccessFlags dst_access);
 
     bool ok_ = false, recreate_next_ = false;
+    // the full setup ran once: only a booted backend may re-arm on a fresh
+    // surface, a half-initialised one (Init failed) has null handles that
+    // would crash the rebuild instead of parking
+    bool booted_ = false;
     bool ui_ready_ = false;  // the overlay backend survives swapchain rebuilds
     uint32_t guest_w_ = 0, guest_h_ = 0;
     VkInstance instance_ = VK_NULL_HANDLE;
@@ -943,6 +981,7 @@ bool VulkanBackend::Init(uint32_t width, uint32_t height) {
     // logs as a success, which is what the 3-b field test hit: "Vulkan ready"
     // in the same log as presents 88 parked 88 and draws 0.
     ok_ = true;
+    booted_ = true;
     LOGR("gpu: Vulkan ready on %s: guest %ux%u, swapchain %ux%u", props.deviceName, guest_w_, guest_h_, extent_.width,
          extent_.height);
     return true;
@@ -1436,6 +1475,8 @@ bool VulkanBackend::ReadbackTargets(std::vector<Target*>& list) {
         t->sig = now;
         g_path.readback_bytes += uint64_t(t->w) * t->h * 4;
         LOG_FIRST(1, "gpu: first readback landed: target %08X %ux%u", t->data, t->w, t->h);
+        static std::atomic<uint32_t> probe{0};
+        if (ProbeDue(probe)) ProbeBytes("readback", t->data, t->w, t->h, t->readback_map, pitch);
     }
     return true;
 }
@@ -2240,6 +2281,16 @@ void VulkanBackend::Draw(const State& s, uint32_t prim, uint32_t start, uint32_t
     g_path.draw_recorded++;
     LOG_FIRST(1, "gpu: first draw recorded: prim %u, count %u, %u streams, target %08X %ux%u format %u", prim, count,
               a.buffer_count, td.data, td.width, td.height, td.format);
+    // the first draws dump the head of their first stream: a field log tells a
+    // degenerate quad (words all zero) from a placed one without a debugger
+    if (g_path.draw_recorded <= 2 && a.buffer_count) {
+        const VertexBuffer& b = a.buffers[0];
+        uint32_t w[8] = {};
+        std::memcpy(w, b.src, std::min<uint32_t>(sizeof(w), b.bytes));
+        LOGI("gpu: probe vertices draw %llu: prim %u, stride %u, bytes %u: %08X %08X %08X %08X %08X %08X %08X %08X",
+             (unsigned long long)g_path.draw_recorded, prim, b.stride, b.bytes, w[0], w[1], w[2], w[3], w[4], w[5],
+             w[6], w[7]);
+    }
 }
 
 void VulkanBackend::Copy(const Surface& src, const Surface& dst, uint32_t count, uint32_t src_rects_va,
@@ -2249,8 +2300,20 @@ void VulkanBackend::Copy(const Surface& src, const Surface& dst, uint32_t count,
         ok_ = false;
         return;
     }
-    if (!CopySurfaceMemory(src, dst, count, src_rects_va, dst_points_va))
+    // counted past the drain, so the beat's number is copies that ran
+    g_path.copies++;
+    if (!CopySurfaceMemory(src, dst, count, src_rects_va, dst_points_va)) {
+        g_path.copy_fail++;
         LOG_FIRST(4, "gpu: unsupported CopyRects is pending 3-c");
+        return;
+    }
+    // what the game's copy landed in the destination, the black hunt needs it
+    gpu::TextureDesc d;
+    if (DescribeSurface(dst, d) && d.linear) {
+        static std::atomic<uint32_t> probe{0};
+        if (ProbeDue(probe))
+            ProbeBytes("copy", d.data, d.width, d.height, (const uint8_t*)kernel::HostPtr(d.data), d.pitch);
+    }
 }
 
 void VulkanBackend::Sync(uint32_t data, uint32_t) {
@@ -2266,6 +2329,12 @@ void VulkanBackend::Flush() {
 void VulkanBackend::Present(const Surface& front) {
     PathBeat();
     g_path.presents++;
+    // a fresh Android surface is the one chance to re-arm a backend that a dead
+    // swapchain disarmed (the field log shows the app coming back from the
+    // background parks forever): the rebuild below re-disarms on failure, so a
+    // genuinely broken device still parks. Only a booted backend re-arms, a
+    // half-initialised one has null handles and would crash the rebuild
+    if (!ok_ && booted_ && host::SurfaceEpoch() != epoch_) ok_ = true;
     if (!ok_ || !front.header) {
         // setup failed: behave like the null backend, the game thread must not spin
         g_path.parked++;
@@ -2277,6 +2346,8 @@ void VulkanBackend::Present(const Surface& front) {
     // frame here until it is back, then rebuild around the new surface
     if (!host::Foreground()) host::WaitForeground();
     if (host::SurfaceEpoch() != epoch_ || recreate_next_) {
+        LOGI("gpu: rebuilding the swapchain: epoch %u -> %u, stale %d", (unsigned)epoch_,
+             (unsigned)host::SurfaceEpoch(), int(recreate_next_));
         epoch_ = host::SurfaceEpoch();
         recreate_next_ = false;
         SubmitDrawsAndReadback();  // the draws of the frame land before the rebuild
@@ -2326,7 +2397,13 @@ void VulkanBackend::Present(const Surface& front) {
         LOG_FIRST(4, "gpu: present decode failed for %08X", front.header);
         return;
     }
-    if (!gamma_identity_) ApplyGamma(px);
+    static std::atomic<uint32_t> frame_probe{0};
+    if (ProbeDue(frame_probe)) ProbeBytes("frame", d.data, d.width, d.height, px.data(), pitch);
+    if (!gamma_identity_) {
+        ApplyGamma(px);
+        static std::atomic<uint32_t> gamma_probe{0};
+        if (ProbeDue(gamma_probe)) ProbeBytes("gamma", d.data, d.width, d.height, px.data(), pitch);
+    }
     // the decoder makes BGRA8; a swapchain that came up as RGBA8 needs the red
     // and blue swapped before the upload
     if (swap_format_ == VK_FORMAT_R8G8B8A8_UNORM)
@@ -2367,6 +2444,9 @@ bool VulkanBackend::SubmitFrame(const std::vector<uint8_t>& px, uint32_t flight)
     }
     // the upload: the decoded guest frame straight into the mapped staging buffer
     VkDeviceSize bytes = VkDeviceSize(guest_w_) * guest_h_ * 4;
+    if (staging_size_[flight] < bytes)
+        LOG_FIRST(4, "gpu: staging %llu bytes is short for the %llu byte frame, upload skipped",
+                  (unsigned long long)staging_size_[flight], (unsigned long long)bytes);
     if (staging_size_[flight] >= bytes && px.size())
         std::memcpy(staging_map_[flight], px.data(), std::min(VkDeviceSize(px.size()), bytes));
     VkImageSubresourceRange all{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
