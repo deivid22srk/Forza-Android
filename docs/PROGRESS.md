@@ -108,17 +108,22 @@
 | 2026-10-22 | [`39768394880`](https://github.com/deivid22srk/Forza-Android/actions/runs/39768394880) | ✅ sucesso | Build do `af47f36` — **fix da rodada 4**: `[[vk::binding]]` antes do tipo no HLSL (reprodutido com glslangValidator: erro idêntico na linha 63 col 11 dos pixel shaders, corrigido), `preTransform = IDENTITY` (contador de lado), falha de shader cacheada. Crítico: APROVADO (sem bloqueantes). |
 | 2026-10-22 | teste em dispositivo (APK do `af47f36`) | 🔍 sondas necessárias | Shaders compilam e o caminho de desenho funciona (`draws 1487 recorded 1487`, readback por frame, 30 fps), mas o conteúdo apresentado segue preto — o elo quebrado (saída dos draws, cópia do jogo, decode, gamma) é invisível sem medição. Bônus: ao sair do app, `vkCreateSwapchainKHR` → `VK_ERROR_SURFACE_LOST` desarma `ok_` para sempre (96 presents estacionados no fim). Log: release `Log/ssss22_10-08-22-34_951.log`. |
 | 2026-10-22 | [`39776022618`](https://github.com/deivid22srk/Forza-Android/actions/runs/39776022618) | ✅ sucesso | Build do `6f94e5c` — **rodada 5**: sondas de conteúdo em cada elo do frame (readback/copy/frame/gamma + descabeço de vértices), `copies (fail N)` no batimento, guarda de staging e **re-arm da swapchain** por epoch da surface com gate `booted_`. Crítico: REPROVADO na 1ª rodada (re-arm sem `booted_` crashava com Init falho), APROVADO após os 3 ajustes. |
+| 2026-10-22 | teste em dispositivo (APK do `6f94e5c`) | 🔍 elo preto pinado + storm de rebuild | Sondas: `probe readback/frame/gamma` idênticos (**mean 0, nonzero 68%** nos frames 600 e 1200) — todos os elos Vulkan reproduzem fielmente o que o jogo desenhou: **preto com alpha** (o preto nasce nos draws do jogo, não no backend). `probe vertices`: quads TLVertex do front-end (rectlist, diffuse `0x00000000`, UV `0,1`). Bônus: `rebuilding the swapchain × 1312` (~1/frame, 52 s) — `VK_SUBOPTIMAL_KHR` persistente (preTransform IDENTITY ≠ currentTransform do painel) rearmava `recreate_next_` a cada frame, com 4 falhas de probe do gralloc por rebuild (5248 no log). Log: release `Log/pp22_10-09-21-11_500.log`. |
+| 2026-10-22 | [`39785982734`](https://github.com/deivid22srk/Forza-Android/actions/runs/39785982734) | ✅ sucesso | Build do `5de4b39` — **rodada 6**: SUBOPTIMAL não recria mais a swapchain (conta `subopt` no batimento; rebuild só em OUT_OF_DATE/SURFACE_LOST/epoch), telemetria de caps da swapchain (transforms reais do painel), telemetria de texturas (`tex binds/created/failed/rt` no batimento + dump do primeiro draw texturizado: stage/data/dims/formato + colop/arg1/arg2/alop + blend + tfactor) e **correção de off-by-one herdado**: constantes `kTss*` locais apagadas (bump env lia os slots 21-26 em vez de 22-27 que o HLE do guest escreve). Crítico: REPROVADO na 1ª rodada (off-by-one do probe + clang-format), APROVADO após as correções. |
 
 ## Próximo passo
 
-1. **Teste de campo do APK da rodada 5** (artifact `forza-full-6f94e5c…` do run
-   [`39776022618`](https://github.com/deivid22srk/Forza-Android/actions/runs/39776022618)):
-   as sondas de conteúdo dizem onde o preto entra — `probe readback` preto = os draws não
-produzem pixel (o `probe vertices` mostra quad degenerado), `probe copy` preto com readback
-não-preto = a cópia do jogo para o back buffer, `probe frame` preto com copy não-preto = decode,
-   `probe gamma` zerando = rampa. O batimento agora traz `copies N (fail M)`.
-   (a) conferir também que **sair e voltar do app não mata mais o vídeo** (re-arm por epoch);
-   (b) contador de FPS ainda em pé (IDENTITY).
-2. Com o elo preto pinado, consertá-lo e seguir para o **Marco 3-c**: depth/stencil, points,
-   cube/3D/depth textures, occlusion reports, `compareEnable` de sombras e o contador
-   `shader_fail` no batimento — abre o caminho das cenas 3D (corrida).
+1. **Teste de campo do APK da rodada 6** (artifact `forza-full-5de4b39…` do run
+   [`39785982734`](https://github.com/deivid22srk/Forza-Android/actions/runs/39785982734)):
+   a linha `gpu: swapchain caps: supported X current X picked X` nomeia o transform real do painel (decide o
+   pré-rotate do blit no 3-c); `gpu: first textured draw: stage S t DATA WxH fmt F … | colop C arg1 A arg2 B alop D | blend …`
+   diz se o caminho de texturas do front-end está vivo e como o combiner mistura sample×diffuse — com o dump agora
+   lendo os slots corretos do `state.h` (o off-by-one herdado do bump env também caiu). No batimento, `subopt N`
+   mede a persistência do SUBOPTIMAL (agora inofensivo) e o rebuild de swapchain deve ser ≤2 por sessão.
+   Mapa de leitura: `t 00000000 1x1 fmt 0` = stage ligado mas o describe falhou (não é textura L8 real);
+   colop MODULATE com diffuse preto = fade layer do jogo (o conteúdo real vem depois); texturas criadas (`created N`)
+   com frame preto = amostragem/combiner errados — pista do elo; zero binds (`binds 0`) = o HLE não entrega texturas.
+2. Com o elo de textura decidido, consertá-lo e seguir para o **Marco 3-c**: depth/stencil, points,
+   cube/3D/depth textures, occlusion reports, `compareEnable` de sombras, contador `shader_fail` no batimento
+   e a comparação de `currentExtent` quando o `subopt` cruzar um limiar (resize sem recriação de surface) —
+   abre o caminho das cenas 3D (corrida).
