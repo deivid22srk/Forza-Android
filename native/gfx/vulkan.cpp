@@ -647,7 +647,7 @@ private:
     VkDeviceMemory null_mem_ = VK_NULL_HANDLE;
     VkImageView null_view_ = VK_NULL_HANDLE;
     Target* pass_target_ = nullptr;  // the render pass open in the current draw command
-    shaderc_compiler_t* compiler_ = nullptr;
+    shaderc_compiler_t compiler_ = nullptr;
 };
 
 VulkanBackend::~VulkanBackend() {
@@ -1708,11 +1708,11 @@ VkSampler VulkanBackend::EnsureSampler(const State& s, int stage) {
 VkShaderModule VulkanBackend::EnsureShader(uint64_t key, const std::string& hlsl, shaderc_shader_kind kind) {
     auto it = shaders_.find(key);
     if (it != shaders_.end()) return it->second;
-    shaderc_compile_options_t* opt = shaderc_compile_options_initialize();
+    shaderc_compile_options_t opt = shaderc_compile_options_initialize();
     shaderc_compile_options_set_source_language(opt, shaderc_source_language_hlsl);
     shaderc_compile_options_set_target_env(opt, shaderc_target_env_vulkan, shaderc_env_version_vulkan_1_1);
     shaderc_compile_options_set_optimization_level(opt, shaderc_optimization_level_performance);
-    shaderc_compilation_result_t* res =
+    shaderc_compilation_result_t res =
         shaderc_compile_into_spv(compiler_, hlsl.data(), hlsl.size(), kind, "forza", "main", opt);
     shaderc_compile_options_release(opt);
     bool ok = res && shaderc_result_get_compilation_status(res) == shaderc_compilation_status_success;
