@@ -6,7 +6,7 @@
 |---|---|---|---|
 | 1 | Esqueleto: repo, CMake modular, app Android, `build.yml`, recompilação no CI, APK que abre e mostra log | 🟢 concluído | Pipeline completo validado no CI e instalado em dispositivo: app acha o jogo, confere SHA-1 e inicia o boot. |
 | 2 | Boot: `GAPS.md`, kernel/XDK suficientes para passar das intros | 🔄 em andamento | Imports de kernel todos resolvidos (0 missing no boot real); o guest cria o device D3D8, roda a sequência de splash e o instalador BKGDINST descompacta os cabs. Telemetria de boot longo no lugar (`4d144e2`): batimento de frames + observador do hdd. Falta o teste longo em dispositivo até o estado de menu. |
-| 3 | Vídeo: D3D8 → Vulkan renderizando menus | 🔄 em andamento | **3-a concluído** (`9d9d8b2`): backend Vulkan com present real (decode do SDK + gamma + blit letterbox), overlay ImGui com FPS real (`fps_counter = true` por padrão) e fallback null. Draws/shaders/texturas = 3-b. |
+| 3 | Vídeo: D3D8 → Vulkan renderizando menus | 🔄 em andamento | **3-a concluído** (`9d9d8b2`): backend Vulkan com present real (decode do SDK + gamma + blit letterbox), overlay ImGui com FPS real (`fps_counter = true` por padrão) e fallback null. **3-b concluído** (`5981d92`): draws fixed-function (quads texturizados dos menus) com HLSL→SPIR-V em processo, texturas BGRA8/DXT/P8 e pipelines por estado; CI verde e APK `forza-full-5981d92…` pronto para campo. Depth/stencil/points/etc. = 3-c. |
 | 4 | Corrida: pista/carro, física, áudio | ⬜ | |
 | 5 | Entrada: toque, giroscópio, gamepad | ⬜ | |
 | 6 | Desempenho: G80/480+, cache, resolução dinâmica, térmica | ⬜ | |
@@ -70,8 +70,7 @@
   disco).
 - **Marco 2 fechado em campo** (log HtUPBQPG do APK `9d9d8b2`): boot completo,
   instalador rodou, loop do front-end estável a 30 fps por 40+ s sem trap.
-- Backend Vulkan (marco 3): **draws fixed-function desde o `ec8e7b1` (3-b)** —
-  HLSL gerado pelo SDK compilado em processo com o libshaderc do NDK, texturas
+- Backend Vulkan (marco 3): **draws fixed-function desde o `ec8e7b1`, fechado em CI no `5981d92` (3-b)** — HLSL gerado pelo SDK compilado em processo com o shaderc (o NDK ≥ r27 parou de embutir: o CI agora o constrói do source com revisão pinada, `ci/build-shaderc.sh` + `ci/shaderc-revision.txt`), texturas
   via decoder do SDK, targets host com readback para a memória do guest antes
   do Present (o caminho de present do 3-a continua intacto). Faltam para o
   3-c: depth/stencil, points, cube/3D/depth textures, occlusion reports.
@@ -98,18 +97,20 @@
 | 2026-10-21 | [`39680166521`](https://github.com/deivid22srk/Forza-Android/actions/runs/39680166521) | ✅ sucesso | Build do `4d144e2` (telemetria de boot longo: batimento de frames + observador do hdd). Crítico: APROVADO (ressalvas A1/A2 de robustez do walk corrigidas antes do push). |
 | 2026-10-21 | [`39686330375`](https://github.com/deivid22srk/Forza-Android/actions/runs/39686330375) | ✅ sucesso | Build do `9d9d8b2` (marco 3-a: Vulkan + FPS). Crítico: APROVADO; ressalvas R1-R5/R7 de sincronização corrigidas antes do push. |
 | 2026-10-21 | teste em dispositivo (APK do `9d9d8b2`) | ✅ marco 2 fechado em campo | **Vulkan ready** (Adreno 660, swapchain 2400x1080); splash sequence completa; instalador gravou 44,8 MiB; `frames: 1291 presented, 30.0 fps` estável até ~51 s sem trap — o jogo passa do boot e roda o loop do front-end. Tela preta = fronteira do 3-a (só clear é desenhado). Contador FPS invisível → R6 confirmada. Log: <https://pastebin.com/raw/HtUPBQPG>. |
-| 2026-10-22 | (pendente) CI do `ec8e7b1` | ⏳ | Build do marco 3-b (draws fixed-function via shaderc + fix do overlay R6). Push aguardando novo token (o anterior foi revogado). |
+| 2026-10-22 | [`39701339167`](https://github.com/deivid22srk/Forza-Android/actions/runs/39701339167) | ❌ falha no Build APK | `ec8e7b1`+docs (`0ace38a`, marco 3-b): o NDK ≥ r27 não embute mais o shaderc — o FATAL_ERROR projetado no CMake do gfx matou o configure. Correção: `6ac069a` compila o shaderc do source (v2025.5 pinada) no CI e o instala via `FORZA_SHADERC_DIR`. Crítico 1ª rodada: REPROVADO (A1: `shaderc_combined` em vez do target fino; A2: headers em `libshaderc/include/`) → corrigido. |
+| 2026-10-22 | [`39708959398`](https://github.com/deivid22srk/Forza-Android/actions/runs/39708959398) | ❌ falha no Build APK | `6ac069a`: **Build shaderc passou** (pipeline cache/dist funcionou); falha nos typedefs — a v2025.5 define os handles como ponteiros (`typedef struct shaderc_compiler* shaderc_compiler_t;`) e o `vulkan.cpp` usava o estilo do header antigo do NDK. Correção: `5981d92` (3 declarações sem `*`). Crítico 3ª rodada: APROVADO. |
+| 2026-10-22 | [`39710808032`](https://github.com/deivid22srk/Forza-Android/actions/runs/39710808032) | ✅ sucesso | Build do `5981d92` — **marco 3-b fechado em CI**: clang-format + Android APK verdes; artifact `forza-full-5981d9231b1f4a407f9a08c5ef0968c37d8d8763` (12 MB). |
 
 ## Próximo passo
 
-1. Push do `ec8e7b1` (marco 3-b) quando houver token válido (o anterior foi
-   revogado) e CI verde.
-2. **Teste de campo do APK do 3-b**: abrir o app com os dados em
-   `/storage/emulated/0/Forza` e conferir: (a) **contador de FPS visível** no
-   canto superior esquerdo (fix da R6); (b) **splash screens desenhadas de
-   verdade** (Disclaimer/logos) e menus do front-end; (c) `adb logcat -s FORZA`
-   sem `gpu: shader compile failed` (se aparecer, o erro do glslang nomeia o
-   conserto); sem linhas de skip (`… são 3-c`) vindas do front-end;
-   (d) boot longo até o menu com `frames:` a 30 fps.
-3. Depois do campo, o **Marco 3-c**: depth/stencil, points, cube/3D/depth
+1. **Teste de campo do APK do 3-b** (artifact `forza-full-5981d92…` do run
+   [`39710808032`](https://github.com/deivid22srk/Forza-Android/actions/runs/39710808032)):
+   abrir o app com os dados em `/storage/emulated/0/Forza` e conferir:
+   (a) **contador de FPS visível** no canto superior esquerdo (fix da R6);
+   (b) **splash screens desenhadas de verdade** (Disclaimer/logos) e menus do
+   front-end; (c) `adb logcat -s FORZA` sem `gpu: shader compile failed` (se
+   aparecer, o erro do glslang nomeia o conserto) e sem linhas de skip
+   (`… são 3-c`) vindas do front-end; (d) boot longo até o menu com `frames:`
+   a 30 fps.
+2. Depois do campo, o **Marco 3-c**: depth/stencil, points, cube/3D/depth
    textures e occlusion reports — abre o caminho das cenas 3D (corrida).

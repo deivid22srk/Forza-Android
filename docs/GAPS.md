@@ -174,6 +174,16 @@ já é portável e chama `gpu::Backend`; o que falta:
 - O 3-b desenha o caminho fixed-function completo (quads texturizados dos
   menus) espelhando o d3d12 do SDK; falhas de compilação HLSL no shaderc do
   NDK logam o erro inteiro e pulam o draw — o log de campo nomeia o conserto.
+- **Aprendizado de toolchain (3-b fechado em CI, `5981d92`)**: o NDK ≥ r27
+  não embute mais o shaderc (confirmado nos zips oficiais r27b/r27c/r28.2).
+  O CI agora o constrói do source: revisão v2025.5 pinada
+  (`ci/shaderc-revision.txt`), deps glslang/SPIRV pinadas pelo `DEPS` da
+  própria revisão, target `shaderc_combined` (o `shaderc` simples é um .a
+  fino sem as deps transitivas) instalado em layout compatível com o NDK
+  antigo e consumido via `FORZA_SHADERC_DIR`. Os headers da v2025.5 definem
+  os handles como ponteiros (`typedef struct shaderc_compiler*
+  shaderc_compiler_t;`) — o `vulkan.cpp` foi alinhado. Cache do dist
+  invalidado por hash da revisão + script + NDK + ABI.
 
 ## Tarefas derivadas
 
