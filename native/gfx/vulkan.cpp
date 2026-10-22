@@ -18,6 +18,7 @@
 // The Dear ImGui FPS counter records on top in the same overlay pass. Draw
 // reports itself and waits for nothing.
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <memory>
@@ -68,6 +69,39 @@ constexpr uint32_t kMaxDescriptorSets = 4096;     // per frame in flight
             return false;                        \
         }                                        \
     } while (0)
+
+// The drawing path telemetry, milestone 3-b field round 2: the 3-b field test
+// looped and presented at 30 fps over a black screen with not one log line,
+// and the path turns out to carry a dozen gates that exit without a word (a
+// draw with no render target, an assembler rejection, a parked present, a
+// silent acquire failure). Every gate now counts and names itself once, and a
+// 10 s heartbeat carries the counters, so the next field log pins down the
+// exact gate where the frames stop instead of guessing.
+struct PathStats {
+    uint64_t presents = 0, parked = 0, shown = 0, decode_fail = 0;
+    uint64_t draw_calls = 0, draw_recorded = 0, draw_no_rt = 0, draw_describe = 0, draw_assemble = 0, draw_fmt = 0,
+             draw_points = 0;
+    uint64_t submits = 0, readback_attempts = 0, readback_bytes = 0;
+    double beat = 0;
+};
+PathStats g_path;
+
+// one line every 10 s with the cumulative counters; called from Present, which
+// runs once per guest swap even when the backend is parked
+void PathBeat() {
+    double now = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    if (g_path.beat && now - g_path.beat < 10.0) return;
+    g_path.beat = now;
+    LOGI(
+        "gpu path: presents %llu shown %llu parked %llu | draws %llu recorded %llu (no-rt %llu, describe %llu, "
+        "assemble %llu, format %llu, points %llu) | submits %llu, readback %llu KiB / %llu targets",
+        (unsigned long long)g_path.presents, (unsigned long long)g_path.shown, (unsigned long long)g_path.parked,
+        (unsigned long long)g_path.draw_calls, (unsigned long long)g_path.draw_recorded,
+        (unsigned long long)g_path.draw_no_rt, (unsigned long long)g_path.draw_describe,
+        (unsigned long long)g_path.draw_assemble, (unsigned long long)g_path.draw_fmt,
+        (unsigned long long)g_path.draw_points, (unsigned long long)g_path.submits,
+        (unsigned long long)(g_path.readback_bytes / 1024), (unsigned long long)g_path.readback_attempts);
+}
 
 uint32_t FindMemoryType(VkPhysicalDevice physical, uint32_t wanted, VkMemoryPropertyFlags props) {
     VkPhysicalDeviceMemoryProperties mem{};
@@ -1323,6 +1357,7 @@ bool VulkanBackend::SubmitDrawsAndReadback() {
     for (auto& [data, t] : targets_)
         if (t.gpu_drawn) dirty.push_back(&t);
     if (dirty.empty()) return true;
+    g_path.readback_attempts += dirty.size();
     return ReadbackTargets(dirty);
 }
 
@@ -1376,6 +1411,8 @@ bool VulkanBackend::ReadbackTargets(std::vector<Target*>& list) {
         t->gpu_drawn = false;
         t->uploaded = true;
         t->sig = now;
+        g_path.readback_bytes += uint64_t(t->w) * t->h * 4;
+        LOG_FIRST(1, "gpu: first readback landed: target %08X %ux%u", t->data, t->w, t->h);
     }
     return true;
 }
@@ -1520,6 +1557,7 @@ bool VulkanBackend::UploadTargetImage(Target& t, const TextureDesc& d) {
     t.uploaded = true;
     t.sig = MemSig(d.data, uint32_t(total));
     t.gpu_drawn = false;
+    LOG_FIRST(1, "gpu: first target image uploaded: %08X %ux%u", d.data, d.width, d.height);
     return true;
 }
 
@@ -1932,10 +1970,20 @@ void VulkanBackend::Clear(const State& s, uint32_t count, const uint8_t* rects, 
 // names exactly what 3-c still needs.
 void VulkanBackend::Draw(const State& s, uint32_t prim, uint32_t start, uint32_t count, const uint8_t* indices) {
     if (!ok_) return;
-    if (!s.rt.header) return;
+    g_path.draw_calls++;
+    if (!s.rt.header) {
+        g_path.draw_no_rt++;
+        LOG_FIRST(4, "gpu: draw dropped, the state carries no render target");
+        return;
+    }
     gpu::TextureDesc td;
-    if (!DescribeSurface(s.rt, td)) return;
+    if (!DescribeSurface(s.rt, td)) {
+        g_path.draw_describe++;
+        LOG_FIRST(4, "gpu: draw dropped, the render target %08X does not describe", s.rt.header);
+        return;
+    }
     if (td.format != kFmtArgb && td.format != kFmtLinArgb) {
+        g_path.draw_fmt++;
         LOG_FIRST(16, "gpu: draws into a format %u target wait for 3-c", td.format);
         return;
     }
@@ -1946,8 +1994,14 @@ void VulkanBackend::Draw(const State& s, uint32_t prim, uint32_t start, uint32_t
     if (s.rs[kRsZEnable] || s.rs[kRsStencilEnable])
         LOG_FIRST(64, "gpu: depth/stencil draws are 3-c, drawing without depth");
     Assembled a;
-    if (!Assemble(s, prim, start, count, indices, a)) return;
+    if (!Assemble(s, prim, start, count, indices, a)) {
+        g_path.draw_assemble++;
+        LOG_FIRST(8, "gpu: draw dropped by the assembler: prim %u, count %u, vs_handle %08X, program shader %s", prim,
+                  count, s.vs_handle, (s.vs_handle & 1) ? (s.vs ? "bound" : "NULL") : "off (fvf)");
+        return;
+    }
     if (a.topology == Topology::Points) {
+        g_path.draw_points++;
         LOG_FIRST(16, "gpu: point draws are 3-c, draw skipped");
         return;
     }
@@ -2158,6 +2212,9 @@ void VulkanBackend::Draw(const State& s, uint32_t prim, uint32_t start, uint32_t
     else
         vkCmdDraw(cmd, a.draw_count, 1, 0, 0);
     rt->gpu_drawn = true;
+    g_path.draw_recorded++;
+    LOG_FIRST(1, "gpu: first draw recorded: prim %u, count %u, %u streams, target %08X %ux%u format %u", prim, count,
+              a.buffer_count, td.data, td.width, td.height, td.format);
 }
 
 void VulkanBackend::Copy(const Surface& src, const Surface& dst, uint32_t count, uint32_t src_rects_va,
@@ -2182,8 +2239,12 @@ void VulkanBackend::Flush() {
 }
 
 void VulkanBackend::Present(const Surface& front) {
+    PathBeat();
+    g_path.presents++;
     if (!ok_ || !front.header) {
         // setup failed: behave like the null backend, the game thread must not spin
+        g_path.parked++;
+        LOG_FIRST(4, "gpu: present parked: ok %d, front header %08X", int(ok_), front.header);
         if (!ok_) std::this_thread::sleep_for(std::chrono::milliseconds(1));
         return;
     }
@@ -2236,6 +2297,7 @@ void VulkanBackend::Present(const Surface& front) {
     std::vector<uint8_t> px;
     DecodeLevel(d, 0, 0, (const uint8_t*)kernel::HostPtr(d.data), nullptr, px, pitch);
     if (px.empty()) {
+        g_path.decode_fail++;
         LOG_FIRST(4, "gpu: present decode failed for %08X", front.header);
         return;
     }
@@ -2244,7 +2306,10 @@ void VulkanBackend::Present(const Surface& front) {
     // and blue swapped before the upload
     if (swap_format_ == VK_FORMAT_R8G8B8A8_UNORM)
         for (size_t i = 0; i + 3 < px.size(); i += 4) std::swap(px[i], px[i + 2]);
-    if (SubmitFrame(px, flight)) forza::ui::PresentTick();
+    if (SubmitFrame(px, flight)) {
+        g_path.shown++;
+        forza::ui::PresentTick();
+    }
 }
 
 // One frame: upload the decoded guest surface, blit it aspect-fitted onto the
@@ -2256,6 +2321,7 @@ bool VulkanBackend::SubmitFrame(const std::vector<uint8_t>& px, uint32_t flight)
     uint32_t idx = 0;
     VkResult acq = vkAcquireNextImageKHR(device_, swapchain_, ~0ull, acquired_[flight], VK_NULL_HANDLE, &idx);
     if (acq == VK_ERROR_OUT_OF_DATE_KHR || acq == VK_ERROR_SURFACE_LOST_KHR) {
+        LOG_FIRST(4, "gpu: acquire reported %d, the swapchain rebuilds on the next present", int(acq));
         recreate_next_ = true;
         return false;
     }
@@ -2349,6 +2415,7 @@ bool VulkanBackend::SubmitFrame(const std::vector<uint8_t>& px, uint32_t flight)
     si.signalSemaphoreCount = 1;
     si.pSignalSemaphores = &rendered_[idx];
     FORZA_VK_SOFT(vkQueueSubmit(queue_, 1, &si, fence), "gpu: submit failed (%d)");
+    g_path.submits++;
     VkPresentInfoKHR pi{VK_STRUCTURE_TYPE_PRESENT_INFO_KHR};
     pi.waitSemaphoreCount = 1;
     pi.pWaitSemaphores = &rendered_[idx];

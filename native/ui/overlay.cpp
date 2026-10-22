@@ -43,7 +43,14 @@ void CheckVkResult(VkResult err) {
 void InitWindow() {
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
-    ImGui::GetIO().IniFilename = nullptr;  // no imgui.ini beside the game files
+    ImGuiIO& io = ImGui::GetIO();
+    io.IniFilename = nullptr;  // no imgui.ini beside the game files
+    // the 13 px default atlas vanishes on a 2400x1080 phone screen at arm's
+    // length; the counter is the one thing that has to stay readable (field
+    // report 3-b round 1: black screen, no counter in sight)
+    ImFontConfig cfg{};
+    cfg.SizePixels = 40.0f;
+    io.Fonts->AddFontDefault(&cfg);
 }
 
 bool InitVulkan(const VulkanInit& info) {
@@ -77,6 +84,7 @@ bool InitVulkan(const VulkanInit& info) {
     }
     if (!ImGui_ImplVulkan_CreateFontsTexture()) LOGW("ui: ImGui font upload failed, the counter may not draw");
     g_vulkan_ok = true;
+    LOGI("ui: ImGui overlay ready on the swapchain render pass");
     return true;
 }
 
@@ -98,6 +106,7 @@ void PresentTick() {
 
 void Record(void* command_buffer, float w, float h) {
     if (!g_vulkan_ok || !g_fps_counter) return;
+    LOG_FIRST(1, "ui: the overlay records, display %.0fx%.0f", w, h);
     ImGuiIO& io = ImGui::GetIO();
     io.DisplaySize = ImVec2(w, h);
     io.DeltaTime = g_delta;
@@ -113,7 +122,10 @@ void Record(void* command_buffer, float w, float h) {
     }
     ImGui::End();
     ImGui::Render();
-    ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), (VkCommandBuffer)command_buffer);
+    ImDrawData* dd = ImGui::GetDrawData();
+    LOG_FIRST(1, "ui: overlay draw data: %d vertices, %d indices", dd ? dd->TotalVtxCount : -1,
+              dd ? dd->TotalIdxCount : -1);
+    ImGui_ImplVulkan_RenderDrawData(dd, (VkCommandBuffer)command_buffer);
 }
 
 void Shutdown() {
