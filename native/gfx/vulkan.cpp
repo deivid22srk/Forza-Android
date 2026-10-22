@@ -24,6 +24,7 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include <SDL3/SDL.h>
@@ -243,12 +244,21 @@ std::string ReplaceAll(std::string s, const std::string& what, const std::string
 std::string BindHlslResources(std::string s) {
     s = ReplaceAll(std::move(s), "cbuffer VC : register(b0)", "[[vk::binding(0, 0)]]\ncbuffer VC : register(b0)");
     s = ReplaceAll(std::move(s), "cbuffer DC : register(b1)", "[[vk::binding(1, 0)]]\ncbuffer DC : register(b1)");
+    // glslang takes the binding attribute only ahead of the whole declaration:
+    // between type and name ("Texture2D [[vk::binding]] tex0") the HLSL parse
+    // dies with 'declaration' : Expected, which dropped every pixel shader and
+    // kept the front-end black in the 3-b field round 3
+    auto Lead = [](std::string& s, const std::string& decl, const std::string& attr) {
+        for (size_t p = s.find(decl); p != std::string::npos; p = s.find(decl, p + attr.size() + 1)) {
+            size_t line = s.rfind('\n', p);
+            line = line == std::string::npos ? 0 : line + 1;
+            s.insert(line, attr);
+        }
+    };
     for (uint32_t i = 0; i < 4; i++) {
         std::string n = std::to_string(i), b = std::to_string(2 + i), sm = std::to_string(6 + i);
-        s = ReplaceAll(std::move(s), "tex" + n + " : register(t" + n + ")",
-                       "[[vk::binding(" + b + ", 0)]] tex" + n + " : register(t" + n + ")");
-        s = ReplaceAll(std::move(s), "smp" + n + " : register(s" + n + ")",
-                       "[[vk::binding(" + sm + ", 0)]] smp" + n + " : register(s" + n + ")");
+        Lead(s, "tex" + n + " : register(t" + n + ");", "[[vk::binding(" + b + ", 0)]] ");
+        Lead(s, "smp" + n + " : register(s" + n + ");", "[[vk::binding(" + sm + ", 0)]] ");
     }
     // glslang's HLSL front end does not take the HLSL infinity literal
     s = ReplaceAll(std::move(s), "1.#INF", "1e38");
@@ -676,6 +686,7 @@ private:
     VkPipelineCache pipe_cache_ = VK_NULL_HANDLE;
     std::unordered_map<uint64_t, VkPipeline> pipelines_;
     std::unordered_map<uint64_t, VkShaderModule> shaders_;  // pixel keys come in with the salt applied
+    std::unordered_set<uint64_t> shader_failed_;            // broken sources recompile per draw without this
     std::unordered_map<uint64_t, VkSampler> samplers_;
     VkImage null_image_ = VK_NULL_HANDLE;  // 1x1 white for stages without a texture
     VkDeviceMemory null_mem_ = VK_NULL_HANDLE;
@@ -985,7 +996,13 @@ bool VulkanBackend::CreateSurfaceAndSwapchain() {
     sc.imageArrayLayers = 1;
     sc.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
     sc.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    sc.preTransform = caps.currentTransform;
+    // the app renders upright window-space content, and the counter and menus
+    // show sideways when the swapchain claims them pre-rotated (currentTransform
+    // is 90/270 on a portrait panel held in landscape): IDENTITY asks the
+    // driver for the scanout rotation pass instead
+    sc.preTransform = caps.supportedTransforms & VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR
+                          ? VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR
+                          : caps.currentTransform;
     sc.compositeAlpha = caps.supportedCompositeAlpha & VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR
                             ? VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR
                             : VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR;
@@ -1752,6 +1769,7 @@ VkSampler VulkanBackend::EnsureSampler(const State& s, int stage) {
 VkShaderModule VulkanBackend::EnsureShader(uint64_t key, const std::string& hlsl, shaderc_shader_kind kind) {
     auto it = shaders_.find(key);
     if (it != shaders_.end()) return it->second;
+    if (shader_failed_.count(key)) return VK_NULL_HANDLE;
     shaderc_compile_options_t opt = shaderc_compile_options_initialize();
     shaderc_compile_options_set_source_language(opt, shaderc_source_language_hlsl);
     shaderc_compile_options_set_target_env(opt, shaderc_target_env_vulkan, shaderc_env_version_vulkan_1_1);
@@ -1763,6 +1781,7 @@ VkShaderModule VulkanBackend::EnsureShader(uint64_t key, const std::string& hlsl
     if (!ok) {
         const char* err = res ? shaderc_result_get_error_message(res) : "no result";
         LOGE("gpu: shader compile failed: %.600s", err);
+        shader_failed_.insert(key);
         if (res) shaderc_result_release(res);
         return VK_NULL_HANDLE;
     }
