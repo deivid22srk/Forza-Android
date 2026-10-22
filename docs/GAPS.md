@@ -162,14 +162,30 @@ já é portável e chama `gpu::Backend`; o que falta:
   extras. Validar no primeiro run completo.
 - **Entry point** e **kernel thunk** são XORados; o `xbe.h` do SDK já trata.
 
+## Diagnóstico no dispositivo (marco 2 fechado, campo HtUPBQPG)
+
+- O boot do jogo está **vivo e completo** no dispositivo: splash sequence
+  inteira, instalador BKGDINST gravou 44,8 MiB no `hdd`, loop do front-end a
+  30 fps estáveis por 40+ s sem trap. A "tela preta" do 3-a era **fronteira de
+  escopo** (só o clear é desenhado), não defeito.
+- O contador de FPS do 3-a não apareceu: a ressalva R6 (ImGui via backend SDL3
+  fora da main thread) estava correta. No 3-b o backend SDL3 saiu e a Record
+  alimenta ImGui com DisplaySize/DeltaTime manuais no thread de render.
+- O 3-b desenha o caminho fixed-function completo (quads texturizados dos
+  menus) espelhando o d3d12 do SDK; falhas de compilação HLSL no shaderc do
+  NDK logam o erro inteiro e pulam o draw — o log de campo nomeia o conserto.
+
 ## Tarefas derivadas
 
-- [ ] Marco 2: boot no dispositivo com o XBE real. O primeiro teste parou no
-      export `IoQueryVolumeInformation` (76); os três imports de kernel
-      ausentes foram implementados. Falta novo APK e novo log. Detalhes em
-      `docs/PROGRESS.md`.
-- [ ] Marco 3: backend Vulkan mínimo (clear/present) + ImGui overlay.
-- [ ] Marco 3: D3D8 draws → Vulkan; cache de pipeline/shaders.
+- [x] Marco 2: boot no dispositivo com o XBE real — fechado no campo do
+      `9d9d8b2` (HtUPBQPG).
+- [x] Marco 3-a: backend Vulkan mínimo (clear/present) + ImGui overlay.
+- [x] Marco 3-b: D3D8 fixed-function draws → Vulkan (shaderc HLSL→SPIR-V,
+      texturas BGRA8/DXT/P8, pipelines por estado, readback para guest).
+- [ ] Marco 3-c: depth/stencil, points, cube/3D/depth textures, occlusion
+      reports (visibilidade), anisotropy — abre as cenas 3D (corrida).
+- [ ] Subir a resolução dos targets além do guest (`render_percent`) e
+      mapear `spreadtap`/`kTexWide` quando isso chegar.
 - [ ] Marco 4: áudio SDL3 validado; XACT/WMADEC.
 - [ ] Marco 5: input (gamepad, toque, giroscópio).
 - [ ] Marco 6: performance nos alvos G80/480+, térmica, resolução dinâmica.

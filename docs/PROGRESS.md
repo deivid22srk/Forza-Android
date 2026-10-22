@@ -68,7 +68,15 @@
 - Os avisos `missing N:\…` são **normais**: N: é o cache de instalação do
   console; o jogo cai para `D:\Media\cabs\*.ca2` (comportamento de boot por
   disco).
-- Backend Vulkan (marco 3): **present real desde o `9d9d8b2`**; faltam os draws do 3-b (HLSL→SPIR-V, texturas DXT/P8/YUY2, pipelines por estado) para os menus aparecerem. **Tela mostra as cores de clear do jogo + o FPS** até lá.
+- **Marco 2 fechado em campo** (log HtUPBQPG do APK `9d9d8b2`): boot completo,
+  instalador rodou, loop do front-end estável a 30 fps por 40+ s sem trap.
+- Backend Vulkan (marco 3): **draws fixed-function desde o `ec8e7b1` (3-b)** —
+  HLSL gerado pelo SDK compilado em processo com o libshaderc do NDK, texturas
+  via decoder do SDK, targets host com readback para a memória do guest antes
+  do Present (o caminho de present do 3-a continua intacto). Faltam para o
+  3-c: depth/stencil, points, cube/3D/depth textures, occlusion reports.
+- Contador de FPS: sem o backend SDL3 do ImGui (R6 confirmada em campo) —
+  DisplaySize/DeltaTime manuais no thread de render.
 - Toque, giroscópio, menu de opções, instalador de assets.
 - XACT/XOnline/XNet/WMADEC não validados.
 
@@ -89,19 +97,19 @@
 | 2026-10-21 | teste em dispositivo (APK do `4733154`, dados em `/storage/emulated/0/Forza`) | ✅ boot vivo; silêncio de 9 s a classificar | Splash em sequência correta (Disclaimer → Junkiexl → Team4za → Frame2, ~2-3 s cada); instalador extraindo `ui_ntsc/megaxpr` para `Z:`; probes de `N:\…` com fallback de disco normais; usuário fechou aos ~17 s sem crash. Log: <https://pastebin.com/raw/m55cxkMy>. |
 | 2026-10-21 | [`39680166521`](https://github.com/deivid22srk/Forza-Android/actions/runs/39680166521) | ✅ sucesso | Build do `4d144e2` (telemetria de boot longo: batimento de frames + observador do hdd). Crítico: APROVADO (ressalvas A1/A2 de robustez do walk corrigidas antes do push). |
 | 2026-10-21 | [`39686330375`](https://github.com/deivid22srk/Forza-Android/actions/runs/39686330375) | ✅ sucesso | Build do `9d9d8b2` (marco 3-a: Vulkan + FPS). Crítico: APROVADO; ressalvas R1-R5/R7 de sincronização corrigidas antes do push. |
+| 2026-10-21 | teste em dispositivo (APK do `9d9d8b2`) | ✅ marco 2 fechado em campo | **Vulkan ready** (Adreno 660, swapchain 2400x1080); splash sequence completa; instalador gravou 44,8 MiB; `frames: 1291 presented, 30.0 fps` estável até ~51 s sem trap — o jogo passa do boot e roda o loop do front-end. Tela preta = fronteira do 3-a (só clear é desenhado). Contador FPS invisível → R6 confirmada. Log: <https://pastebin.com/raw/HtUPBQPG>. |
+| 2026-10-22 | (pendente) CI do `ec8e7b1` | ⏳ | Build do marco 3-b (draws fixed-function via shaderc + fix do overlay R6). Push aguardando novo token (o anterior foi revogado). |
 
 ## Próximo passo
 
-1. **Teste de campo do APK do `9d9d8b2`** (Vulkan + FPS): abrir o app com os
-   dados em `/storage/emulated/0/Forza` e conferir, em `adb logcat -s FORZA`:
-   (a) `gpu: Vulkan ready on …` (setup passou no aparelho); (b) contador de FPS
-   no canto superior esquerdo (~30 com o cap); (c) alternar background/foreground
-   ~5× e ver a imagem voltar (rebuild de surface); (d) boot longo 10–15 min até
-   o menu, com `frames:`/`hdd:` e, no menu, até 8 linhas `gpu: draw … 3-b`
-   (fecha o **Marco 2**).
-2. A tela mostra **as cores de clear do jogo + o FPS** — os menus desenhados
-   vêm no **3-b** (HLSL→SPIR-V, texturas dos formatos do Xbox, pipelines por
-   estado). Sem tombstone em `ImGui_ImplSDL3_NewFrame` é o outro ponto a vigiar
-   (consultas SDL3 fora da main thread — R6 do Crítico, aceito nesta etapa).
-3. Ao fechar o Marco 2, seguir para o **Marco 3-b**: shaders/texturas/draws —
-   menus de verdade.
+1. Push do `ec8e7b1` (marco 3-b) quando houver token válido (o anterior foi
+   revogado) e CI verde.
+2. **Teste de campo do APK do 3-b**: abrir o app com os dados em
+   `/storage/emulated/0/Forza` e conferir: (a) **contador de FPS visível** no
+   canto superior esquerdo (fix da R6); (b) **splash screens desenhadas de
+   verdade** (Disclaimer/logos) e menus do front-end; (c) `adb logcat -s FORZA`
+   sem `gpu: shader compile failed` (se aparecer, o erro do glslang nomeia o
+   conserto); sem linhas de skip (`… são 3-c`) vindas do front-end;
+   (d) boot longo até o menu com `frames:` a 30 fps.
+3. Depois do campo, o **Marco 3-c**: depth/stencil, points, cube/3D/depth
+   textures e occlusion reports — abre o caminho das cenas 3D (corrida).
