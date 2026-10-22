@@ -6,7 +6,7 @@
 |---|---|---|---|
 | 1 | Esqueleto: repo, CMake modular, app Android, `build.yml`, recompilação no CI, APK que abre e mostra log | 🟢 concluído | Pipeline completo validado no CI e instalado em dispositivo: app acha o jogo, confere SHA-1 e inicia o boot. |
 | 2 | Boot: `GAPS.md`, kernel/XDK suficientes para passar das intros | 🔄 em andamento | Imports de kernel todos resolvidos (0 missing no boot real); o guest cria o device D3D8, roda a sequência de splash e o instalador BKGDINST descompacta os cabs. Telemetria de boot longo no lugar (`4d144e2`): batimento de frames + observador do hdd. Falta o teste longo em dispositivo até o estado de menu. |
-| 3 | Vídeo: D3D8 → Vulkan renderizando menus | 🔄 em andamento | **3-a concluído** (`9d9d8b2`): backend Vulkan com present real (decode do SDK + gamma + blit letterbox), overlay ImGui com FPS real (`fps_counter = true` por padrão) e fallback null. **3-b concluído** (`5981d92`): draws fixed-function (quads texturizados dos menus) com HLSL→SPIR-V em processo, texturas BGRA8/DXT/P8 e pipelines por estado. **Rodada de campo 2** (`fb1f2a7`): telemetria do caminho de desenho (LOG_FIRST em cada porta + batimento de 10 s) e contador com fonte própria a 40 px. **Rodada 3** (`298485b`): a telemetria pinou a causa raiz da tela preta — `ok_` do backend nunca era armado (nascia `false`, 19 atribuições `false`, nenhuma `true` em todo o histórico) e todo o backend vivia como o nulo; fix arma `ok_ = true` no fim do `Init` (Crítico APROVADO, CI verde). Depth/stencil/points/etc. = 3-c. |
+| 3 | Vídeo: D3D8 → Vulkan renderizando menus | 🔄 em andamento | **3-a concluído** (`9d9d8b2`): backend Vulkan com present real (decode do SDK + gamma + blit letterbox), overlay ImGui com FPS real (`fps_counter = true` por padrão) e fallback null. **3-b concluído** (`5981d92`): draws fixed-function (quads texturizados dos menus) com HLSL→SPIR-V em processo, texturas BGRA8/DXT/P8 e pipelines por estado. **Rodada de campo 2** (`fb1f2a7`): telemetria do caminho de desenho (LOG_FIRST em cada porta + batimento de 10 s) e contador com fonte própria a 40 px. **Rodada 3** (`298485b`): a telemetria pinou a causa raiz da tela preta — `ok_` do backend nunca era armado (nascia `false`, 19 atribuições `false`, nenhuma `true` em todo o histórico) e todo o backend vivia como o nulo; fix arma `ok_ = true` no fim do `Init` (Crítico APROVADO, CI verde). **Rodada 4** (`af47f36`): campo mostrou contador de FPS visível porém de lado, e `draws 7295 recorded 0` com 7434 falhas de compilação; reprodutor local (geradores do SDK + glslangValidator) pinou o `[[vk::binding]]` entre tipo e nome no HLSL — todo pixel shader morria; atributo agora lidera a declaração, swapchain usa `preTransform = IDENTITY` (rotacão volta ao driver) e falha de shader é cacheada. Depth/stencil/points/etc. = 3-c. |
 | 4 | Corrida: pista/carro, física, áudio | ⬜ | |
 | 5 | Entrada: toque, giroscópio, gamepad | ⬜ | |
 | 6 | Desempenho: G80/480+, cache, resolução dinâmica, térmica | ⬜ | |
@@ -104,18 +104,19 @@
 | 2026-10-22 | [`39758253034`](https://github.com/deivid22srk/Forza-Android/actions/runs/39758253034) | ✅ sucesso | Build do `fb1f2a7` (telemetria do caminho de desenho + contador a 40 px). Crítico: APROVADO. |
 | 2026-10-22 | teste em dispositivo (APK do `fb1f2a7`) | 🔍 causa raiz pinada | Overlay agora inicializa (`ImGui overlay ready`); batimento revelou `presents 88 parked 88, draws 0` com `present parked: ok 0` — o `ok_` do backend nunca era armado. Log: <https://pastebin.com/raw/gSKYNf00>. |
 | 2026-10-22 | [`39762133780`](https://github.com/deivid22srk/Forza-Android/actions/runs/39762133780) | ✅ sucesso | Build do `298485b` — **fix: `ok_ = true` no fim do `Init`** (o backend rodava como o nulo desde o 3-a). Crítico: APROVADO (sem bloqueantes). |
+| 2026-10-22 | teste em dispositivo (APK do `298485b`) | 🟡 metade do caminho | **Contador de FPS visível pela 1ª vez** (porém rotacionado 90°); batimento: `presents 7297 shown 7297 parked 0` mas `draws 7295 recorded 0` — 7434× `shader compile failed: forza:63: 'declaration' : Expected`; tela = clear da CPU + overlay. Log: release `Log/44444422_10-07-29-42_203.log`. |
+| 2026-10-22 | [`39768394880`](https://github.com/deivid22srk/Forza-Android/actions/runs/39768394880) | ✅ sucesso | Build do `af47f36` — **fix da rodada 4**: `[[vk::binding]]` antes do tipo no HLSL (reprodutido com glslangValidator: erro idêntico na linha 63 col 11 dos pixel shaders, corrigido), `preTransform = IDENTITY` (contador de lado), falha de shader cacheada. Crítico: APROVADO (sem bloqueantes). |
 
 ## Próximo passo
 
-1. **Teste de campo do APK do fix `298485b`** (artifact `forza-full-298485b…`
-   do run [`39762133780`](https://github.com/deivid22srk/Forza-Android/actions/runs/39762133780)):
-   abrir o app com os dados em `/storage/emulated/0/Forza` e conferir:
-   (a) **contador de FPS visível** no canto superior esquerdo (fonte a 40 px);
-   (b) **splash screens desenhadas de verdade** (Disclaimer/logos) e menus do
-   front-end; (c) no `adb logcat -s FORZA`, as linhas novas esperadas:
-   `gpu: first target image uploaded`, `gpu: first draw recorded`, `gpu: first
-   readback landed` e o batimento `gpu path:` com `shown` subindo e
-   `parked` parado; (d) se algo cair numa porta (no-rt/describe/assemble/
-   format/points), a linha `LOG_FIRST` nomeia o conserto exato.
-2. Depois do campo, o **Marco 3-c**: depth/stencil, points, cube/3D/depth
-   textures e occlusion reports — abre o caminho das cenas 3D (corrida).
+1. **Teste de campo do APK da rodada 4** (artifact `forza-full-af47f36…` do run
+   [`39768394880`](https://github.com/deivid22srk/Forza-Android/actions/runs/39768394880)):
+   (a) **contador de FPS em pé correto** (preTransform IDENTITY); (b) **splash screens e menus
+desenhados de verdade** (os pixel shaders agora compilam — `gpu: first draw recorded` e
+`gpu: first readback landed` no log, batimento com `recorded` subindo e readback em KiB);
+   (c) se sobrar porta (no-rt/describe/assemble/format/points ou `pipeline creation failed`),
+   a linha nomeia o conserto. Porta silenciosa conhecida adiante: shadow (`compareEnable`)
+   só ativa em corrida, anotada para a 3-c.
+2. Depois do campo, o **Marco 3-c**: depth/stencil, points, cube/3D/depth textures,
+   occlusion reports e o contador `shader_fail` no batimento — abre o caminho das cenas 3D
+   (corrida).
