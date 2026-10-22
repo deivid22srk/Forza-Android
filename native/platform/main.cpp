@@ -126,7 +126,7 @@ FORZA_EXPORT int main(int, char**) {
         logx::Flush();
         return 1;
     }
-    forza::ui::InitWindow(g_window);
+    forza::ui::InitWindow();
 
     input::Init();
     if (app::kGame.window) app::kGame.window(g_window);
