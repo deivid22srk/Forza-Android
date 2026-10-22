@@ -39,6 +39,12 @@ jobs:
       # token for the private repository that holds the game file.
       FORZA_XBE_URL: ${{ secrets.FORZA_XBE_URL }}
       FORZA_XBE_SHA256: ${{ secrets.FORZA_XBE_SHA256 }}
+      # The NDK stopped bundling shaderc (absent from r27 and r28), and the
+      # graphics layer compiles the game's HLSL with it on the device.
+      # ci/build-shaderc.sh installs it here from the pinned revision and the
+      # graphics CMake picks it up through this variable.
+      FORZA_SHADERC_DIR: ${{ github.workspace }}/shaderc-dist
+      FORZA_SHADERC_ABI: arm64-v8a
 
     steps:
       - uses: actions/checkout@v4
@@ -64,13 +70,7 @@ jobs:
       - name: Host packages
         run: |
           sudo apt-get update
-          sudo apt-get install -y ninja-build ccache
-
-      - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2
-        with:
-          key: forza-${{ runner.os }}-${{ github.ref_name }}
-          max-size: 2G
+          sudo apt-get install -y ninja-build ccache cmake
 
       - name: Build mode
         id: mode
@@ -81,6 +81,24 @@ jobs:
             echo "full=false" >> "$GITHUB_OUTPUT"
             echo "::warning::FORZA_XBE_URL is not set; building the stub APK. Add the secret and re-run for the game."
           fi
+
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: forza-${{ runner.os }}-${{ github.ref_name }}
+          max-size: 2G
+
+      # The stub build compiles none of native/, so it never needs shaderc.
+      - name: shaderc cache
+        if: steps.mode.outputs.full == 'true'
+        uses: actions/cache@v4
+        with:
+          path: shaderc-dist
+          key: shaderc-${{ hashFiles('ci/shaderc-revision.txt', 'ci/build-shaderc.sh') }}-ndk-${{ env.NDK_VERSION }}-${{ env.FORZA_SHADERC_ABI }}
+
+      - name: Build shaderc
+        if: steps.mode.outputs.full == 'true'
+        run: ci/build-shaderc.sh
 
       - name: Check out the recompiler SDK
         if: steps.mode.outputs.full == 'true'

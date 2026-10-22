@@ -9,32 +9,40 @@ target_include_directories(main PRIVATE
     ${IMGUI_DIR}
     ${IMGUI_DIR}/backends)
 
-# The NDK ships libshaderc prebuilt for runtime HLSL to SPIR-V (the SDK's
-# gpu/shaders.cpp emits HLSL per draw; the D3D12 reference compiles it with
-# D3DCompile, this side compiles it with the glslang front end inside the
-# game's process). The build dies here when the NDK install lacks it, so a
-# broken toolchain is loud instead of a game that draws nothing.
+# The graphics layer compiles the SDK's generated HLSL with shaderc at runtime
+# (the D3D12 reference compiles it with D3DCompile, this side uses the glslang
+# front end inside the game's process). Google stopped bundling shaderc with
+# the NDK (verified absent from the r27b/r27c and r28.2 packages), so the CI
+# builds it from the pinned revision via ci/build-shaderc.sh and points this
+# build at the result through FORZA_SHADERC_DIR. Local builds with an NDK that
+# still bundles it need nothing. The build dies here when neither source is
+# available, so a broken toolchain is loud instead of a game that draws
+# nothing.
 if(NOT ANDROID)
     return()
 endif()
-set(FORZA_SHADERC ${ANDROID_NDK}/sources/third_party/shaderc)
-if(NOT EXISTS ${FORZA_SHADERC}/include/shaderc/shaderc.h)
-    message(FATAL_ERROR
-        "shaderc is missing from the NDK at ${ANDROID_NDK} "
-        "(sources/third_party/shaderc/include/shaderc/shaderc.h not found). "
-        "Milestone 3-b compiles the game's shaders with it at runtime.")
+set(FORZA_SHADERC "")
+if(FORZA_SHADERC_DIR AND EXISTS ${FORZA_SHADERC_DIR}/include/shaderc/shaderc.h)
+    set(FORZA_SHADERC ${FORZA_SHADERC_DIR})
+elseif(DEFINED ENV{FORZA_SHADERC_DIR}
+        AND EXISTS $ENV{FORZA_SHADERC_DIR}/include/shaderc/shaderc.h)
+    set(FORZA_SHADERC $ENV{FORZA_SHADERC_DIR})
+elseif(EXISTS ${ANDROID_NDK}/sources/third_party/shaderc/include/shaderc/shaderc.h)
+    set(FORZA_SHADERC ${ANDROID_NDK}/sources/third_party/shaderc)
 endif()
-set(FORZA_SHADERC_LIB "")
-foreach(v c++_shared c++_static)
-    if(NOT FORZA_SHADERC_LIB AND EXISTS ${FORZA_SHADERC}/libs/${v}/${ANDROID_ABI}/libshaderc.a)
-        set(FORZA_SHADERC_LIB ${FORZA_SHADERC}/libs/${v}/${ANDROID_ABI}/libshaderc.a)
-    endif()
-endforeach()
-if(NOT FORZA_SHADERC_LIB)
+if(NOT FORZA_SHADERC)
     message(FATAL_ERROR
-        "libshaderc.a for ${ANDROID_ABI} is missing from ${FORZA_SHADERC}/libs. "
-        "This NDK snapshot carries no prebuilt shaderc for the target ABI.")
+        "shaderc not found; set FORZA_SHADERC_DIR to a directory holding "
+        "include/shaderc/shaderc.h and libs/c++_static/<abi>/libshaderc.a "
+        "(the CI builds it with ci/build-shaderc.sh from ci/shaderc-revision.txt). "
+        "The game compiles its shaders with it at runtime.")
 endif()
-message(STATUS "shaderc (NDK): ${FORZA_SHADERC_LIB}")
+if(NOT EXISTS ${FORZA_SHADERC}/libs/c++_static/${ANDROID_ABI}/libshaderc.a)
+    message(FATAL_ERROR
+        "libshaderc.a for ${ANDROID_ABI} is missing under "
+        "${FORZA_SHADERC}/libs/c++_static. This shaderc build does not carry "
+        "a prebuilt static library for the target ABI.")
+endif()
+message(STATUS "shaderc: ${FORZA_SHADERC}")
 target_include_directories(main PRIVATE ${FORZA_SHADERC}/include)
-target_link_libraries(main PRIVATE ${FORZA_SHADERC_LIB})
+target_link_libraries(main PRIVATE ${FORZA_SHADERC}/libs/c++_static/${ANDROID_ABI}/libshaderc.a)
