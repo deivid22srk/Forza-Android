@@ -612,6 +612,7 @@ struct Texture {
     VkFormat fmt = VK_FORMAT_UNDEFINED;
     bool compressed = false;
     uint64_t epoch = ~0ull;  // the guest's DirtyEpoch the upload came from
+    uint64_t sig = 0;        // the guest content signature the upload came from
 };
 
 // a per frame upload arena: vertices, indices, constant buffers, texture and
@@ -659,7 +660,8 @@ private:
     void DropTarget(uint32_t data);
     bool UploadTargetImage(Target& t, const TextureDesc& d);
     bool CopyTargetToFb(Target& t);
-    Texture* EnsureTexture(uint32_t data, const TextureDesc& d, const FormatInfo& fi, const uint32_t* palette);
+    Texture* EnsureTexture(uint32_t data, const TextureDesc& d, const FormatInfo& fi, const uint32_t* palette,
+                           uint64_t sig);
     bool UploadTexture(Texture& tx, const TextureDesc& d, const FormatInfo& fi, const uint32_t* palette);
     VkSampler EnsureSampler(const State& s, int stage);
     VkShaderModule EnsureShader(uint64_t key, const std::string& hlsl, shaderc_shader_kind kind);
@@ -1653,12 +1655,12 @@ bool VulkanBackend::CopyTargetToFb(Target& t) {
 }
 
 Texture* VulkanBackend::EnsureTexture(uint32_t data, const TextureDesc& d, const FormatInfo& fi,
-                                      const uint32_t* palette) {
+                                      const uint32_t* palette, uint64_t sig) {
     uint64_t epoch = DirtyEpoch(data);
     HostVkFormat hv = HostVk(fi.host);
     auto it = textures_.find(data);
     if (it != textures_.end() && it->second.epoch == epoch && it->second.fmt == hv.format && it->second.w == d.width &&
-        it->second.h == d.height)
+        it->second.h == d.height && it->second.sig == sig)
         return &it->second;
     SubmitDrawsAndReadback();  // the current commands may sample the old image
     if (it != textures_.end()) {
@@ -1720,6 +1722,7 @@ Texture* VulkanBackend::EnsureTexture(uint32_t data, const TextureDesc& d, const
         drop();
         return nullptr;
     }
+    stored.sig = sig;
     VkImageViewCreateInfo vc{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
     vc.image = stored.image;
     vc.viewType = VK_IMAGE_VIEW_TYPE_2D;
@@ -1752,6 +1755,54 @@ bool VulkanBackend::UploadTexture(Texture& tx, const TextureDesc& d, const Forma
         if (px.empty()) {
             LOGE("gpu: texture level %u decode failed", l);
             return false;
+        }
+        if (l == 0 && !fi.compressed) {
+            // what the guest held at upload time: the splash frames stay black
+            // with a proven-faithful chain and a correct combiner (SELECTARG1
+            // texture, blend off), so the field log must say whether the
+            // decode saw the image at all and which bytes lead it; a 1x1 level
+            // decodes to 4 bytes, so pad instead of reading past px
+            uint8_t head[8] = {};
+            std::memcpy(head, px.data(), std::min<size_t>(px.size(), 8));
+            LOG_FIRST(1,
+                      "gpu: first texture upload: %08X %ux%u pitch %u bytes %u | %02X %02X %02X %02X %02X %02X %02X "
+                      "%02X",
+                      d.data, d.width, d.height, d.pitch, unsigned(px.size()), head[0], head[1], head[2], head[3],
+                      head[4], head[5], head[6], head[7]);
+            static std::atomic<uint32_t> seq{0};
+            if (ProbeDue(seq)) ProbeBytes("tex", d.data, w, h, px.data(), row_pitch);
+            // if the first upload decodes to nothing, the image lives
+            // elsewhere (an XPR header offset, a stale resource pointer):
+            // walk the neighbourhood once and name the offsets that hold bytes
+            static std::atomic<uint32_t> scan{0};
+            if (scan.fetch_add(1, std::memory_order_relaxed) == 0) {
+                bool any = false;
+                for (uint8_t b : px)
+                    if (b) {
+                        any = true;
+                        break;
+                    }
+                if (!any) {
+                    uint32_t found = 0;
+                    for (int64_t off = -(1 << 20); off < (3 << 20) && found < 8; off += 4096) {
+                        // HostPtr never fails: the 4 GiB guest space is reserved
+                        // PROT_NONE outside the two physical windows and the
+                        // committed pages, so only whole committed pages may be
+                        // walked or this probe faults instead of logging
+                        uint32_t va = uint32_t(d.data + off) & ~0xFFFu;
+                        if (!mem::IsCommitted(va)) continue;
+                        const uint8_t* p = static_cast<const uint8_t*>(kernel::HostPtr(va));
+                        bool has = false;
+                        for (uint32_t i = 0; i < 4096 && !has; i++) has = p[i] != 0;
+                        if (has) {
+                            LOGI("gpu: texture content %08X at %+d KiB", va,
+                                 int((int64_t(va) - int64_t(d.data)) >> 10));
+                            found++;
+                        }
+                    }
+                    if (!found) LOGI("gpu: no texture content within 1 MiB before to 3 MiB after %08X", d.data);
+                }
+            }
         }
         Ring r;
         VkDeviceSize off;
@@ -2085,6 +2136,7 @@ void VulkanBackend::Draw(const State& s, uint32_t prim, uint32_t start, uint32_t
     // the stages: which textures, which are targets themselves, what needs recording
     TexInfo infos[4]{};
     TextureDesc tds[4]{};
+    uint64_t tsigs[4]{};
     bool rt_stage[4]{};
     bool bound = s.textures[0] || s.textures[1] || s.textures[2] || s.textures[3];
     if (bound) g_path.tex_binds++;
@@ -2108,8 +2160,16 @@ void VulkanBackend::Draw(const State& s, uint32_t prim, uint32_t start, uint32_t
             rt_stage[i] = true;
             setup = true;
         } else {
+            // the title may fill a texture after the first bind saw it (an
+            // async XPR loader writes plain guest memory, nothing calls
+            // MarkDirty): re-upload on content change, the same signature
+            // rule the targets already follow
+            tsigs[i] = MemSig(d.data, TotalSize(d));
             auto tx = textures_.find(d.data);
-            if (tx == textures_.end() || tx->second.epoch != DirtyEpoch(d.data)) setup = true;
+            if (tx == textures_.end() || tx->second.epoch != DirtyEpoch(d.data) || tx->second.sig != tsigs[i])
+                setup = true;
+            if (tx != textures_.end() && tx->second.sig != tsigs[i])
+                LOG_FIRST(1, "gpu: texture %08X changed on the guest since its upload, re-uploads", d.data);
         }
     }
     if (rt_stage[0] || rt_stage[1] || rt_stage[2] || rt_stage[3]) g_path.tex_rt++;
@@ -2158,7 +2218,7 @@ void VulkanBackend::Draw(const State& s, uint32_t prim, uint32_t start, uint32_t
         } else if (tds[i].data) {
             const FormatInfo& fi = Format(tds[i].format);
             const uint32_t* pal = s.palettes[i] ? (const uint32_t*)kernel::HostPtr(s.palettes[i]) : nullptr;
-            if (!EnsureTexture(tds[i].data, tds[i], fi, pal)) {
+            if (!EnsureTexture(tds[i].data, tds[i], fi, pal, tsigs[i])) {
                 g_path.tex_failed++;
                 LOG_FIRST(8, "gpu: stage texture %08X upload failed, draw skipped", tds[i].data);
                 return;
