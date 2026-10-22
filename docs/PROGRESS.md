@@ -6,7 +6,7 @@
 |---|---|---|---|
 | 1 | Esqueleto: repo, CMake modular, app Android, `build.yml`, recompilação no CI, APK que abre e mostra log | 🟢 concluído | Pipeline completo validado no CI e instalado em dispositivo: app acha o jogo, confere SHA-1 e inicia o boot. |
 | 2 | Boot: `GAPS.md`, kernel/XDK suficientes para passar das intros | 🔄 em andamento | Imports de kernel todos resolvidos (0 missing no boot real); o guest cria o device D3D8, roda a sequência de splash e o instalador BKGDINST descompacta os cabs. Telemetria de boot longo no lugar (`4d144e2`): batimento de frames + observador do hdd. Falta o teste longo em dispositivo até o estado de menu. |
-| 3 | Vídeo: D3D8 → Vulkan renderizando menus | 🔄 em andamento | **3-a concluído** (`9d9d8b2`): backend Vulkan com present real (decode do SDK + gamma + blit letterbox), overlay ImGui com FPS real (`fps_counter = true` por padrão) e fallback null. **3-b concluído** (`5981d92`): draws fixed-function (quads texturizados dos menus) com HLSL→SPIR-V em processo, texturas BGRA8/DXT/P8 e pipelines por estado. **Rodada de campo 2** (`fb1f2a7`): telemetria do caminho de desenho (LOG_FIRST em cada porta + batimento de 10 s) e contador com fonte própria a 40 px. **Rodada 3** (`298485b`): a telemetria pinou a causa raiz da tela preta — `ok_` do backend nunca era armado (nascia `false`, 19 atribuições `false`, nenhuma `true` em todo o histórico) e todo o backend vivia como o nulo; fix arma `ok_ = true` no fim do `Init` (Crítico APROVADO, CI verde). **Rodada 4** (`af47f36`): campo mostrou contador de FPS visível porém de lado, e `draws 7295 recorded 0` com 7434 falhas de compilação; reprodutor local (geradores do SDK + glslangValidator) pinou o `[[vk::binding]]` entre tipo e nome no HLSL — todo pixel shader morria; atributo agora lidera a declaração, swapchain usa `preTransform = IDENTITY` (rotacão volta ao driver) e falha de shader é cacheada. Depth/stencil/points/etc. = 3-c. |
+| 3 | Vídeo: D3D8 → Vulkan renderizando menus | 🔄 em andamento | **3-a concluído** (`9d9d8b2`): backend Vulkan com present real (decode do SDK + gamma + blit letterbox), overlay ImGui com FPS real (`fps_counter = true` por padrão) e fallback null. **3-b concluído** (`5981d92`): draws fixed-function (quads texturizados dos menus) com HLSL→SPIR-V em processo, texturas BGRA8/DXT/P8 e pipelines por estado. **Rodada de campo 2** (`fb1f2a7`): telemetria do caminho de desenho (LOG_FIRST em cada porta + batimento de 10 s) e contador com fonte própria a 40 px. **Rodada 3** (`298485b`): a telemetria pinou a causa raiz da tela preta — `ok_` do backend nunca era armado (nascia `false`, 19 atribuições `false`, nenhuma `true` em todo o histórico) e todo o backend vivia como o nulo; fix arma `ok_ = true` no fim do `Init` (Crítico APROVADO, CI verde). **Rodada 4** (`af47f36`): campo mostrou contador de FPS visível porém de lado, e `draws 7295 recorded 0` com 7434 falhas de compilação; reprodutor local (geradores do SDK + glslangValidator) pinou o `[[vk::binding]]` entre tipo e nome no HLSL — todo pixel shader morria; atributo agora lidera a declaração, swapchain usa `preTransform = IDENTITY` (rotacão volta ao driver) e falha de shader é cacheada. **Rodada 5** (`6f94e5c`): o campo do af47f36 apresenta frames com conteúdo preto (`draws 1487 recorded 1487`, 30 fps) e, ao sair do app, `VK_ERROR_SURFACE_LOST` desarma `ok_` para sempre (96 presents estacionados); agora sondas de conteúdo medem a média e a fatia não-preta em cada elo (readback → cópia do jogo → frame decodificado → gamma) mais o descabeço do stream 0 dos 2 primeiros draws, e um epoch novo da surface re-arma um backend já booted (Crítico: REPROVADO na 1ª rodada — re-arm sem gate `booted_` crasharia com Init falho — APROVADO após o gate, o clamp de pitch na sonda e o `<atomic>` explícito). Depth/stencil/points/etc. = 3-c. |
 | 4 | Corrida: pista/carro, física, áudio | ⬜ | |
 | 5 | Entrada: toque, giroscópio, gamepad | ⬜ | |
 | 6 | Desempenho: G80/480+, cache, resolução dinâmica, térmica | ⬜ | |
@@ -106,17 +106,19 @@
 | 2026-10-22 | [`39762133780`](https://github.com/deivid22srk/Forza-Android/actions/runs/39762133780) | ✅ sucesso | Build do `298485b` — **fix: `ok_ = true` no fim do `Init`** (o backend rodava como o nulo desde o 3-a). Crítico: APROVADO (sem bloqueantes). |
 | 2026-10-22 | teste em dispositivo (APK do `298485b`) | 🟡 metade do caminho | **Contador de FPS visível pela 1ª vez** (porém rotacionado 90°); batimento: `presents 7297 shown 7297 parked 0` mas `draws 7295 recorded 0` — 7434× `shader compile failed: forza:63: 'declaration' : Expected`; tela = clear da CPU + overlay. Log: release `Log/44444422_10-07-29-42_203.log`. |
 | 2026-10-22 | [`39768394880`](https://github.com/deivid22srk/Forza-Android/actions/runs/39768394880) | ✅ sucesso | Build do `af47f36` — **fix da rodada 4**: `[[vk::binding]]` antes do tipo no HLSL (reprodutido com glslangValidator: erro idêntico na linha 63 col 11 dos pixel shaders, corrigido), `preTransform = IDENTITY` (contador de lado), falha de shader cacheada. Crítico: APROVADO (sem bloqueantes). |
+| 2026-10-22 | teste em dispositivo (APK do `af47f36`) | 🔍 sondas necessárias | Shaders compilam e o caminho de desenho funciona (`draws 1487 recorded 1487`, readback por frame, 30 fps), mas o conteúdo apresentado segue preto — o elo quebrado (saída dos draws, cópia do jogo, decode, gamma) é invisível sem medição. Bônus: ao sair do app, `vkCreateSwapchainKHR` → `VK_ERROR_SURFACE_LOST` desarma `ok_` para sempre (96 presents estacionados no fim). Log: release `Log/ssss22_10-08-22-34_951.log`. |
+| 2026-10-22 | [`39776022618`](https://github.com/deivid22srk/Forza-Android/actions/runs/39776022618) | ✅ sucesso | Build do `6f94e5c` — **rodada 5**: sondas de conteúdo em cada elo do frame (readback/copy/frame/gamma + descabeço de vértices), `copies (fail N)` no batimento, guarda de staging e **re-arm da swapchain** por epoch da surface com gate `booted_`. Crítico: REPROVADO na 1ª rodada (re-arm sem `booted_` crashava com Init falho), APROVADO após os 3 ajustes. |
 
 ## Próximo passo
 
-1. **Teste de campo do APK da rodada 4** (artifact `forza-full-af47f36…` do run
-   [`39768394880`](https://github.com/deivid22srk/Forza-Android/actions/runs/39768394880)):
-   (a) **contador de FPS em pé correto** (preTransform IDENTITY); (b) **splash screens e menus
-desenhados de verdade** (os pixel shaders agora compilam — `gpu: first draw recorded` e
-`gpu: first readback landed` no log, batimento com `recorded` subindo e readback em KiB);
-   (c) se sobrar porta (no-rt/describe/assemble/format/points ou `pipeline creation failed`),
-   a linha nomeia o conserto. Porta silenciosa conhecida adiante: shadow (`compareEnable`)
-   só ativa em corrida, anotada para a 3-c.
-2. Depois do campo, o **Marco 3-c**: depth/stencil, points, cube/3D/depth textures,
-   occlusion reports e o contador `shader_fail` no batimento — abre o caminho das cenas 3D
-   (corrida).
+1. **Teste de campo do APK da rodada 5** (artifact `forza-full-6f94e5c…` do run
+   [`39776022618`](https://github.com/deivid22srk/Forza-Android/actions/runs/39776022618)):
+   as sondas de conteúdo dizem onde o preto entra — `probe readback` preto = os draws não
+produzem pixel (o `probe vertices` mostra quad degenerado), `probe copy` preto com readback
+não-preto = a cópia do jogo para o back buffer, `probe frame` preto com copy não-preto = decode,
+   `probe gamma` zerando = rampa. O batimento agora traz `copies N (fail M)`.
+   (a) conferir também que **sair e voltar do app não mata mais o vídeo** (re-arm por epoch);
+   (b) contador de FPS ainda em pé (IDENTITY).
+2. Com o elo preto pinado, consertá-lo e seguir para o **Marco 3-c**: depth/stencil, points,
+   cube/3D/depth textures, occlusion reports, `compareEnable` de sombras e o contador
+   `shader_fail` no batimento — abre o caminho das cenas 3D (corrida).
